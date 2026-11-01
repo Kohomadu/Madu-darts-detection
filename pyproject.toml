@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "madu-darts"
+version = "0.1.0"
+description = "Local automatic dart scoring — detection tool"
+requires-python = ">=3.9"
+dependencies = [
+    "opencv-python-headless>=4.8",
+    "numpy>=1.24",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "httpx2>=2.0"]
+
+[project.scripts]
+madu-darts = "madu_darts.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"madu_darts.server" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
