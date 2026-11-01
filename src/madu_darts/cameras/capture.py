@@ -1,12 +1,31 @@
-"""OpenCV capture handle: resolution/FPS + best-effort exposure/WB lock."""
+"""OpenCV capture handle: resolution/FPS + settle-then-lock exposure/WB.
+
+Autodarts locks image controls once the Board is lit so motion/detection stay
+stable. We do the same without shipping a full UVC panel yet:
+
+1. Enable auto-exposure / auto-WB.
+2. Grab a few frames so the driver can settle under the LED ring.
+3. Read the settled absolute exposure (and WB temperature when available).
+4. Switch to manual and write those values back.
+
+Just flipping ``CAP_PROP_AUTO_EXPOSURE`` to manual without step 2–4 leaves many
+V4L2 cams near-black (the Board symptom we hit on first live run).
+"""
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from madu_darts.cameras.config import CameraConfig
 from madu_darts.cameras.devices import CameraDevice
+
+log = logging.getLogger(__name__)
+
+# OpenCV / V4L2 conventions (float props; DirectShow often mirrors these).
+_AUTO_EXPOSURE_ON = (0.75, 3.0)  # aperture-priority / auto
+_AUTO_EXPOSURE_OFF = (0.25, 1.0)  # manual
 
 
 class CaptureHandle(Protocol):
@@ -63,7 +82,7 @@ class OpenCvCaptureHandle:
 
 
 class OpenCvCaptureFactory:
-    """Open a device, set MJPG/res/FPS when possible, lock exposure/WB."""
+    """Open a device, set MJPG/res/FPS when possible, settle-then-lock exposure/WB."""
 
     def __init__(self, api_preference: int | None = None) -> None:
         self._api_preference = api_preference
@@ -86,10 +105,7 @@ class OpenCvCaptureFactory:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.height)
         cap.set(cv2.CAP_PROP_FPS, config.fps)
 
-        if config.lock_exposure:
-            _lock_exposure(cap, cv2)
-        if config.lock_white_balance:
-            _lock_white_balance(cap, cv2)
+        apply_image_controls(cap, cv2, config)
 
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or config.width)
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or config.height)
@@ -103,18 +119,84 @@ class OpenCvCaptureFactory:
         )
 
 
-def _lock_exposure(cap: Any, cv2: Any) -> None:
-    """Best-effort: disable auto-exposure. V4L2 and DirectShow differ."""
-    # V4L2: 1 = manual; DirectShow often uses 0.25 = manual.
-    for value in (1.0, 0.25, 0.0):
+def apply_image_controls(cap: Any, cv2: Any, config: CameraConfig) -> None:
+    """Settle under auto, then lock exposure/WB when requested."""
+    if config.lock_exposure or config.lock_white_balance:
+        _enable_auto(cap, cv2, exposure=config.lock_exposure, white_balance=config.lock_white_balance)
+        _warmup(cap, config.settle_frames)
+
+    if config.lock_exposure:
+        _lock_exposure(cap, cv2, absolute=config.exposure)
+    if config.lock_white_balance:
+        _lock_white_balance(cap, cv2, temperature=config.white_balance_temperature)
+
+
+def _set_any(cap: Any, prop: int, values: tuple[float, ...]) -> bool:
+    for value in values:
         try:
-            cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, value)
+            if cap.set(prop, value):
+                return True
         except Exception:
-            pass
+            continue
+    return False
 
 
-def _lock_white_balance(cap: Any, cv2: Any) -> None:
+def _enable_auto(cap: Any, cv2: Any, *, exposure: bool, white_balance: bool) -> None:
+    if exposure:
+        if not _set_any(cap, cv2.CAP_PROP_AUTO_EXPOSURE, _AUTO_EXPOSURE_ON):
+            log.debug("could not enable auto-exposure before settle")
+    if white_balance:
+        try:
+            cap.set(cv2.CAP_PROP_AUTO_WB, 1)
+        except Exception:
+            log.debug("could not enable auto white-balance before settle")
+
+
+def _warmup(cap: Any, frames: int) -> None:
+    """Grab frames so auto-exposure / auto-WB can converge under the LED ring."""
+    for _ in range(max(0, frames)):
+        try:
+            cap.read()
+        except Exception:
+            break
+
+
+def _lock_exposure(cap: Any, cv2: Any, *, absolute: float | None) -> None:
+    """Disable auto-exposure and pin the settled (or configured) absolute value."""
+    try:
+        settled = float(cap.get(cv2.CAP_PROP_EXPOSURE))
+    except Exception:
+        settled = float("nan")
+
+    target = absolute if absolute is not None else settled
+    _set_any(cap, cv2.CAP_PROP_AUTO_EXPOSURE, _AUTO_EXPOSURE_OFF)
+
+    if target == target:  # not NaN
+        try:
+            if not cap.set(cv2.CAP_PROP_EXPOSURE, float(target)):
+                log.debug("exposure lock write rejected (value=%s)", target)
+        except Exception:
+            log.debug("exposure lock write failed (value=%s)", target, exc_info=True)
+    else:
+        log.debug("exposure lock skipped write: no settled value available")
+
+
+def _lock_white_balance(cap: Any, cv2: Any, *, temperature: float | None) -> None:
+    """Disable auto-WB and pin the settled (or configured) colour temperature."""
+    try:
+        settled = float(cap.get(cv2.CAP_PROP_WB_TEMPERATURE))
+    except Exception:
+        settled = float("nan")
+
+    target = temperature if temperature is not None else settled
     try:
         cap.set(cv2.CAP_PROP_AUTO_WB, 0)
     except Exception:
-        pass
+        log.debug("could not disable auto white-balance")
+
+    if target == target and target > 0:
+        try:
+            if not cap.set(cv2.CAP_PROP_WB_TEMPERATURE, float(target)):
+                log.debug("WB temperature lock write rejected (value=%s)", target)
+        except Exception:
+            log.debug("WB temperature lock write failed (value=%s)", target, exc_info=True)

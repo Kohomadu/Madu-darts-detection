@@ -31,6 +31,11 @@ class CameraConfig:
     fps: int = DEFAULT_FPS
     lock_exposure: bool = True
     lock_white_balance: bool = True
+    # Frames to grab under auto-exposure/WB before locking (LED ring settle).
+    settle_frames: int = 15
+    # Optional absolute overrides after settle; ``None`` = use the driver's settled value.
+    exposure: float | None = None
+    white_balance_temperature: float | None = None
 
 
 def default_board_slots(
