@@ -10,6 +10,9 @@ from typing import Callable, Protocol
 from madu_darts.cameras.devices import CameraDevice, normalize_location
 
 _BY_PATH_VIDEO = re.compile(r"-video-index(\d+)$")
+# UVC: streaming iface is typically ``…:1.0-video-index0``; metadata is ``…:1.1-…``.
+# Both normalize to the same short port (``7.2``), so keep only *.0 interfaces.
+_STREAMING_IFACE = re.compile(r":\d+\.0-video-index0$", re.IGNORECASE)
 
 
 class DeviceEnumerator(Protocol):
@@ -44,6 +47,10 @@ def devices_from_by_path_entries(
 
     Pure helper so USB location parsing can be tested without creating
     Linux-style filenames (colons) on Windows.
+
+    Only ``video-index0`` on a ``*:N.0`` USB interface is kept. UVC cams also
+    expose a metadata node on ``*:N.1`` that would otherwise collide on the
+    short location (``7.2`` matched 2 devices).
     """
     devices: list[CameraDevice] = []
     for name, path, target in entries:
@@ -54,6 +61,8 @@ def devices_from_by_path_entries(
         path_index = int(match.group(1))
         if path_index != 0:
             continue
+        if not _STREAMING_IFACE.search(name):
+            continue
         devices.append(
             CameraDevice(
                 index=_video_index_from_target(target, fallback=path_index),
@@ -62,7 +71,21 @@ def devices_from_by_path_entries(
                 path=path,
             )
         )
-    return devices
+    return _dedupe_by_location(devices)
+
+
+def _dedupe_by_location(devices: list[CameraDevice]) -> list[CameraDevice]:
+    """Keep one device per short USB location (lowest OpenCV index wins)."""
+    best: dict[str, CameraDevice] = {}
+    passthrough: list[CameraDevice] = []
+    for device in devices:
+        if device.location is None:
+            passthrough.append(device)
+            continue
+        previous = best.get(device.location)
+        if previous is None or device.index < previous.index:
+            best[device.location] = device
+    return sorted(best.values(), key=lambda d: d.index) + passthrough
 
 
 def _video_index_from_target(target: str, *, fallback: int) -> int:

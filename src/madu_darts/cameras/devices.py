@@ -103,9 +103,12 @@ def match_devices_by_location(
             resolved[location] = candidates[0]
             continue
         if len(candidates) > 1:
+            detail = ", ".join(
+                f"index={d.index} name={d.name!r}" for d in candidates
+            )
             raise LookupError(
-                f"location {location!r} matched {len(candidates)} devices; "
-                "USB location must be unique"
+                f"location {location!r} matched {len(candidates)} devices "
+                f"({detail}); USB location must be unique"
             )
         raise LookupError(
             f"no camera with USB location {location!r}; "

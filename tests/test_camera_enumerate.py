@@ -43,6 +43,51 @@ def test_linux_by_path_reads_usb_locations() -> None:
     ]
 
 
+def test_linux_by_path_skips_uvc_metadata_iface_that_shares_port() -> None:
+    """Real Boards: each cam has …:1.0 (capture) and …:1.1 (metadata), both index0.
+
+    Without filtering, short location ``7.2`` matches 2 devices and open fails.
+    """
+    entries = [
+        (
+            "platform-xhci-usb-0:7.2:1.0-video-index0",
+            "/dev/v4l/by-path/platform-xhci-usb-0:7.2:1.0-video-index0",
+            "/dev/video0",
+        ),
+        (
+            "platform-xhci-usb-0:7.2:1.1-video-index0",
+            "/dev/v4l/by-path/platform-xhci-usb-0:7.2:1.1-video-index0",
+            "/dev/video1",
+        ),
+        (
+            "platform-xhci-usb-0:7.3:1.0-video-index0",
+            "/dev/v4l/by-path/platform-xhci-usb-0:7.3:1.0-video-index0",
+            "/dev/video2",
+        ),
+        (
+            "platform-xhci-usb-0:7.3:1.1-video-index0",
+            "/dev/v4l/by-path/platform-xhci-usb-0:7.3:1.1-video-index0",
+            "/dev/video3",
+        ),
+        (
+            "platform-xhci-usb-0:7.4:1.0-video-index0",
+            "/dev/v4l/by-path/platform-xhci-usb-0:7.4:1.0-video-index0",
+            "/dev/video4",
+        ),
+        (
+            "platform-xhci-usb-0:7.4:1.1-video-index0",
+            "/dev/v4l/by-path/platform-xhci-usb-0:7.4:1.1-video-index0",
+            "/dev/video5",
+        ),
+    ]
+    devices = devices_from_by_path_entries(entries)
+    assert [(d.location, d.index) for d in devices] == [
+        ("7.2", 0),
+        ("7.3", 2),
+        ("7.4", 4),
+    ]
+
+
 def test_linux_by_path_missing_dir_returns_empty(tmp_path: Path) -> None:
     devices = LinuxByPathEnumerator(tmp_path / "missing").list_devices()
     assert devices == []
