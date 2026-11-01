@@ -91,8 +91,8 @@ def test_open_read_close_by_usb_location() -> None:
     assert ingest.is_open
     assert [d.index for d, _ in factory.opened] == [10, 11, 12]
     assert all(cfg.width == 1280 for _, cfg in factory.opened)
-    assert all(cfg.lock_exposure for _, cfg in factory.opened)
-    assert all(cfg.lock_white_balance for _, cfg in factory.opened)
+    assert all(cfg.lock_exposure is False for _, cfg in factory.opened)
+    assert all(cfg.lock_white_balance is False for _, cfg in factory.opened)
 
     frames = ingest.read()
     assert set(frames) == {0, 1, 2}

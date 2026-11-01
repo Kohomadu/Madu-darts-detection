@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-import pytest
+import numpy as np
 
 from madu_darts.cameras.capture import apply_image_controls
 from madu_darts.cameras.config import CameraConfig
@@ -23,13 +23,21 @@ class FakeCap:
     props: dict[int, float] = field(default_factory=dict)
     sets: list[tuple[int, float]] = field(default_factory=list)
     reads: int = 0
-    reject_set: set[int] = field(default_factory=set)
+    frame_mean: float = 80.0
+    reject_auto_on_first: bool = False
 
     def set(self, prop: int, value: float) -> bool:
-        self.sets.append((prop, float(value)))
-        if prop in self.reject_set:
+        value = float(value)
+        self.sets.append((prop, value))
+        if (
+            self.reject_auto_on_first
+            and prop == FakeCv2.CAP_PROP_AUTO_EXPOSURE
+            and value == 3.0
+            and not any(p == prop and v == 3.0 for p, v in self.sets[:-1])
+        ):
+            # First native-auto attempt fails; OpenCV float fallback should win.
             return False
-        self.props[prop] = float(value)
+        self.props[prop] = value
         return True
 
     def get(self, prop: int) -> float:
@@ -37,87 +45,80 @@ class FakeCap:
 
     def read(self) -> tuple[bool, object]:
         self.reads += 1
-        # Simulate auto-exposure converging while we warm up.
         if self.reads >= 5:
             self.props[FakeCv2.CAP_PROP_EXPOSURE] = -5.0
             self.props[FakeCv2.CAP_PROP_WB_TEMPERATURE] = 4500.0
-        return True, object()
+        return True, np.full((8, 8, 3), self.frame_mean, dtype=np.uint8)
 
 
 CV2 = FakeCv2()
 
 
-def test_settle_then_lock_pins_auto_converged_values() -> None:
-    cap = FakeCap(props={CV2.CAP_PROP_EXPOSURE: -12.0, CV2.CAP_PROP_WB_TEMPERATURE: 2800.0})
-    apply_image_controls(cap, CV2, CameraConfig(settle_frames=8))
-
-    assert cap.reads == 8
-    # Auto enabled first, then manual + settled values written.
-    assert (CV2.CAP_PROP_AUTO_EXPOSURE, 0.75) in cap.sets
-    assert (CV2.CAP_PROP_AUTO_WB, 1.0) in cap.sets
-    assert (CV2.CAP_PROP_AUTO_EXPOSURE, 0.25) in cap.sets
-    assert (CV2.CAP_PROP_AUTO_WB, 0.0) in cap.sets
-    assert (CV2.CAP_PROP_EXPOSURE, -5.0) in cap.sets
-    assert (CV2.CAP_PROP_WB_TEMPERATURE, 4500.0) in cap.sets
-    assert cap.props[CV2.CAP_PROP_EXPOSURE] == -5.0
-    assert cap.props[CV2.CAP_PROP_WB_TEMPERATURE] == 4500.0
+def test_default_config_does_not_lock() -> None:
+    cfg = CameraConfig()
+    assert cfg.lock_exposure is False
+    assert cfg.lock_white_balance is False
 
 
-def test_absolute_overrides_win_over_settled_values() -> None:
+def test_unlocked_still_enables_auto_and_warms_up() -> None:
     cap = FakeCap()
+    apply_image_controls(cap, CV2, CameraConfig())
+    assert (CV2.CAP_PROP_AUTO_EXPOSURE, 3.0) in cap.sets
+    assert (CV2.CAP_PROP_AUTO_WB, 1.0) in cap.sets
+    assert cap.reads == 8
+    assert not any(p == CV2.CAP_PROP_AUTO_EXPOSURE and v == 1.0 for p, v in cap.sets)
+
+
+def test_settle_then_lock_pins_auto_converged_values_when_bright() -> None:
+    cap = FakeCap(frame_mean=80.0)
     apply_image_controls(
         cap,
         CV2,
-        CameraConfig(settle_frames=3, exposure=-4.0, white_balance_temperature=5600.0),
+        CameraConfig(lock_exposure=True, lock_white_balance=True, settle_frames=8),
+    )
+    assert cap.reads >= 8
+    assert (CV2.CAP_PROP_AUTO_EXPOSURE, 3.0) in cap.sets
+    assert (CV2.CAP_PROP_AUTO_EXPOSURE, 1.0) in cap.sets
+    assert (CV2.CAP_PROP_EXPOSURE, -5.0) in cap.sets
+    assert (CV2.CAP_PROP_WB_TEMPERATURE, 4500.0) in cap.sets
+
+
+def test_dark_post_lock_re_enables_auto() -> None:
+    cap = FakeCap(frame_mean=5.0)
+    apply_image_controls(
+        cap,
+        CV2,
+        CameraConfig(lock_exposure=True, lock_white_balance=True, settle_frames=5, min_lock_mean=25.0),
+    )
+    # Final action should put auto back on after the dark check.
+    auto_on_indexes = [i for i, (p, v) in enumerate(cap.sets) if p == CV2.CAP_PROP_AUTO_EXPOSURE and v == 3.0]
+    auto_off_indexes = [i for i, (p, v) in enumerate(cap.sets) if p == CV2.CAP_PROP_AUTO_EXPOSURE and v == 1.0]
+    assert auto_off_indexes and auto_on_indexes
+    assert max(auto_on_indexes) > max(auto_off_indexes)
+
+
+def test_absolute_overrides_win_over_settled_values() -> None:
+    cap = FakeCap(frame_mean=90.0)
+    apply_image_controls(
+        cap,
+        CV2,
+        CameraConfig(
+            lock_exposure=True,
+            lock_white_balance=True,
+            settle_frames=3,
+            exposure=-4.0,
+            white_balance_temperature=5600.0,
+        ),
     )
     assert (CV2.CAP_PROP_EXPOSURE, -4.0) in cap.sets
     assert (CV2.CAP_PROP_WB_TEMPERATURE, 5600.0) in cap.sets
 
 
-def test_no_lock_skips_settle_and_writes() -> None:
-    cap = FakeCap()
+def test_auto_exposure_falls_back_when_native_value_rejected() -> None:
+    cap = FakeCap(reject_auto_on_first=True, frame_mean=90.0)
     apply_image_controls(
         cap,
         CV2,
-        CameraConfig(lock_exposure=False, lock_white_balance=False, settle_frames=20),
+        CameraConfig(lock_exposure=True, lock_white_balance=False, settle_frames=2),
     )
-    assert cap.reads == 0
-    assert cap.sets == []
-
-
-def test_lock_exposure_only_still_settles() -> None:
-    cap = FakeCap()
-    apply_image_controls(
-        cap,
-        CV2,
-        CameraConfig(lock_exposure=True, lock_white_balance=False, settle_frames=5),
-    )
-    assert cap.reads == 5
-    assert any(p == CV2.CAP_PROP_AUTO_EXPOSURE for p, _ in cap.sets)
-    assert not any(p == CV2.CAP_PROP_AUTO_WB for p, _ in cap.sets)
-    assert (CV2.CAP_PROP_EXPOSURE, -5.0) in cap.sets
-
-
-def test_auto_exposure_falls_back_when_first_value_rejected() -> None:
-    cap = FakeCap(reject_set={})
-    # Reject 0.75, accept 3.0 for auto-on.
-    original_set = cap.set
-
-    def selective_set(prop: int, value: float) -> bool:
-        if prop == CV2.CAP_PROP_AUTO_EXPOSURE and value == 0.75:
-            cap.sets.append((prop, float(value)))
-            return False
-        return original_set(prop, value)
-
-    cap.set = selective_set  # type: ignore[method-assign]
-    apply_image_controls(cap, CV2, CameraConfig(settle_frames=2, lock_white_balance=False))
-    assert (CV2.CAP_PROP_AUTO_EXPOSURE, 3.0) in cap.sets
-
-
-def test_missing_settled_value_still_disables_auto() -> None:
-    cap = FakeCap()
-    # Never converges — get stays NaN; we still switch to manual.
-    cap.read = lambda: (True, object())  # type: ignore[method-assign]
-    apply_image_controls(cap, CV2, CameraConfig(settle_frames=2, lock_white_balance=False))
-    assert (CV2.CAP_PROP_AUTO_EXPOSURE, 0.25) in cap.sets
-    assert not any(p == CV2.CAP_PROP_EXPOSURE for p, _ in cap.sets)
+    assert (CV2.CAP_PROP_AUTO_EXPOSURE, 0.75) in cap.sets

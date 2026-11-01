@@ -1,15 +1,9 @@
-"""OpenCV capture handle: resolution/FPS + settle-then-lock exposure/WB.
+"""OpenCV capture handle: resolution/FPS + optional settle-then-lock exposure/WB.
 
 Autodarts locks image controls once the Board is lit so motion/detection stay
-stable. We do the same without shipping a full UVC panel yet:
-
-1. Enable auto-exposure / auto-WB.
-2. Grab a few frames so the driver can settle under the LED ring.
-3. Read the settled absolute exposure (and WB temperature when available).
-4. Switch to manual and write those values back.
-
-Just flipping ``CAP_PROP_AUTO_EXPOSURE`` to manual without step 2–4 leaves many
-V4L2 cams near-black (the Board symptom we hit on first live run).
+stable. On these UVC cams, reading ``CAP_PROP_EXPOSURE`` during auto and writing
+it back in manual mode often pins a near-black shutter — so locking is **opt-in**
+and aborted when a post-lock frame is still too dark (auto stays on).
 """
 
 from __future__ import annotations
@@ -23,9 +17,9 @@ from madu_darts.cameras.devices import CameraDevice
 
 log = logging.getLogger(__name__)
 
-# OpenCV / V4L2 conventions (float props; DirectShow often mirrors these).
-_AUTO_EXPOSURE_ON = (0.75, 3.0)  # aperture-priority / auto
-_AUTO_EXPOSURE_OFF = (0.25, 1.0)  # manual
+# Prefer V4L2-native enums first; OpenCV's 0.75/0.25 floats are a second try.
+_AUTO_EXPOSURE_ON = (3.0, 0.75)
+_AUTO_EXPOSURE_OFF = (1.0, 0.25)
 
 
 class CaptureHandle(Protocol):
@@ -82,7 +76,7 @@ class OpenCvCaptureHandle:
 
 
 class OpenCvCaptureFactory:
-    """Open a device, set MJPG/res/FPS when possible, settle-then-lock exposure/WB."""
+    """Open a device, set MJPG/res/FPS when possible, optionally settle-then-lock."""
 
     def __init__(self, api_preference: int | None = None) -> None:
         self._api_preference = api_preference
@@ -120,15 +114,30 @@ class OpenCvCaptureFactory:
 
 
 def apply_image_controls(cap: Any, cv2: Any, config: CameraConfig) -> None:
-    """Settle under auto, then lock exposure/WB when requested."""
-    if config.lock_exposure or config.lock_white_balance:
-        _enable_auto(cap, cv2, exposure=config.lock_exposure, white_balance=config.lock_white_balance)
-        _warmup(cap, config.settle_frames)
+    """Optionally settle under auto, lock, then undo the lock if the frame stays dark."""
+    if not (config.lock_exposure or config.lock_white_balance):
+        # Still nudge auto on so freshly opened UVC nodes aren't stuck in manual black.
+        _enable_auto(cap, cv2, exposure=True, white_balance=True)
+        _warmup(cap, min(8, config.settle_frames))
+        return
+
+    _enable_auto(cap, cv2, exposure=config.lock_exposure, white_balance=config.lock_white_balance)
+    _warmup(cap, config.settle_frames)
 
     if config.lock_exposure:
         _lock_exposure(cap, cv2, absolute=config.exposure)
     if config.lock_white_balance:
         _lock_white_balance(cap, cv2, temperature=config.white_balance_temperature)
+
+    mean = _frame_mean(cap)
+    if mean is not None and mean < config.min_lock_mean:
+        log.warning(
+            "post-lock frame mean %.1f < %.1f; leaving auto-exposure/WB on",
+            mean,
+            config.min_lock_mean,
+        )
+        _enable_auto(cap, cv2, exposure=config.lock_exposure, white_balance=config.lock_white_balance)
+        _warmup(cap, min(8, config.settle_frames))
 
 
 def _set_any(cap: Any, prop: int, values: tuple[float, ...]) -> bool:
@@ -138,22 +147,25 @@ def _set_any(cap: Any, prop: int, values: tuple[float, ...]) -> bool:
                 return True
         except Exception:
             continue
+    # Some drivers return False even when the value stuck; try a last write anyway.
+    try:
+        cap.set(prop, values[-1])
+    except Exception:
+        pass
     return False
 
 
 def _enable_auto(cap: Any, cv2: Any, *, exposure: bool, white_balance: bool) -> None:
     if exposure:
-        if not _set_any(cap, cv2.CAP_PROP_AUTO_EXPOSURE, _AUTO_EXPOSURE_ON):
-            log.debug("could not enable auto-exposure before settle")
+        _set_any(cap, cv2.CAP_PROP_AUTO_EXPOSURE, _AUTO_EXPOSURE_ON)
     if white_balance:
         try:
             cap.set(cv2.CAP_PROP_AUTO_WB, 1)
         except Exception:
-            log.debug("could not enable auto white-balance before settle")
+            log.debug("could not enable auto white-balance")
 
 
 def _warmup(cap: Any, frames: int) -> None:
-    """Grab frames so auto-exposure / auto-WB can converge under the LED ring."""
     for _ in range(max(0, frames)):
         try:
             cap.read()
@@ -161,8 +173,22 @@ def _warmup(cap: Any, frames: int) -> None:
             break
 
 
+def _frame_mean(cap: Any) -> float | None:
+    try:
+        ok, frame = cap.read()
+    except Exception:
+        return None
+    if not ok or frame is None:
+        return None
+    try:
+        import numpy as np
+
+        return float(np.mean(frame))
+    except Exception:
+        return None
+
+
 def _lock_exposure(cap: Any, cv2: Any, *, absolute: float | None) -> None:
-    """Disable auto-exposure and pin the settled (or configured) absolute value."""
     try:
         settled = float(cap.get(cv2.CAP_PROP_EXPOSURE))
     except Exception:
@@ -173,16 +199,12 @@ def _lock_exposure(cap: Any, cv2: Any, *, absolute: float | None) -> None:
 
     if target == target:  # not NaN
         try:
-            if not cap.set(cv2.CAP_PROP_EXPOSURE, float(target)):
-                log.debug("exposure lock write rejected (value=%s)", target)
+            cap.set(cv2.CAP_PROP_EXPOSURE, float(target))
         except Exception:
             log.debug("exposure lock write failed (value=%s)", target, exc_info=True)
-    else:
-        log.debug("exposure lock skipped write: no settled value available")
 
 
 def _lock_white_balance(cap: Any, cv2: Any, *, temperature: float | None) -> None:
-    """Disable auto-WB and pin the settled (or configured) colour temperature."""
     try:
         settled = float(cap.get(cv2.CAP_PROP_WB_TEMPERATURE))
     except Exception:
@@ -196,7 +218,6 @@ def _lock_white_balance(cap: Any, cv2: Any, *, temperature: float | None) -> Non
 
     if target == target and target > 0:
         try:
-            if not cap.set(cv2.CAP_PROP_WB_TEMPERATURE, float(target)):
-                log.debug("WB temperature lock write rejected (value=%s)", target)
+            cap.set(cv2.CAP_PROP_WB_TEMPERATURE, float(target))
         except Exception:
             log.debug("WB temperature lock write failed (value=%s)", target, exc_info=True)

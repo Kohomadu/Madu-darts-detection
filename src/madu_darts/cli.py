@@ -44,8 +44,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="bind a USB location to an OpenCV index (Windows dev fallback); repeatable",
     )
     serve.add_argument("--flip", action="append", default=[], type=int, metavar="SLOT", help="rotate a slot 180°; repeatable")
-    serve.add_argument("--no-lock-exposure", action="store_true")
-    serve.add_argument("--no-lock-white-balance", action="store_true")
+    serve.add_argument(
+        "--lock-exposure",
+        action="store_true",
+        help="settle under auto then lock exposure (off by default; can underexpose on V4L2)",
+    )
+    serve.add_argument(
+        "--lock-white-balance",
+        action="store_true",
+        help="settle under auto then lock white balance (off by default)",
+    )
+    serve.add_argument("--no-lock-exposure", action="store_true", help=argparse.SUPPRESS)
+    serve.add_argument("--no-lock-white-balance", action="store_true", help=argparse.SUPPRESS)
     serve.add_argument("--stream-fps", type=float, default=10.0, help="MJPEG rate for the Calibration view")
     serve.add_argument("--synthetic", action="store_true", help="use rendered Board views instead of USB cameras (UI dev)")
     serve.add_argument("--log-level", default="info")
@@ -64,8 +74,8 @@ def ingest_config_from_args(args: argparse.Namespace) -> IngestConfig:
         width=args.width,
         height=args.height,
         fps=args.fps,
-        lock_exposure=not args.no_lock_exposure,
-        lock_white_balance=not args.no_lock_white_balance,
+        lock_exposure=bool(args.lock_exposure) and not args.no_lock_exposure,
+        lock_white_balance=bool(args.lock_white_balance) and not args.no_lock_white_balance,
     )
     return IngestConfig(slots=slots, capture=capture, location_index_overrides=dict(args.index_override))
 

@@ -29,13 +29,18 @@ class CameraConfig:
     width: int = DEFAULT_WIDTH
     height: int = DEFAULT_HEIGHT
     fps: int = DEFAULT_FPS
-    lock_exposure: bool = True
-    lock_white_balance: bool = True
+    # Default off: V4L2 "settle then lock" often pins a near-black shutter on these
+    # UVC cams. Leave auto on for Calibration; opt in with --lock-exposure once a
+    # known-good absolute exposure is configured (or Autodarts-style UVC panel).
+    lock_exposure: bool = False
+    lock_white_balance: bool = False
     # Frames to grab under auto-exposure/WB before locking (LED ring settle).
-    settle_frames: int = 15
+    settle_frames: int = 30
     # Optional absolute overrides after settle; ``None`` = use the driver's settled value.
     exposure: float | None = None
     white_balance_temperature: float | None = None
+    # If a post-lock frame is darker than this mean (0–255), re-enable auto and skip lock.
+    min_lock_mean: float = 25.0
 
 
 def default_board_slots(

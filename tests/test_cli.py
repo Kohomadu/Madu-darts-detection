@@ -15,7 +15,7 @@ def test_defaults_are_autodarts_shaped_and_lan_reachable() -> None:
     assert [s.location for s in cfg.slots] == ["7.2", "7.3", "7.4"]
     assert not any(s.rotate_180 for s in cfg.slots)
     assert cfg.location_index_overrides == {}
-    assert cfg.capture.lock_exposure and cfg.capture.lock_white_balance
+    assert not cfg.capture.lock_exposure and not cfg.capture.lock_white_balance
 
 
 def test_overrides_flips_and_locations() -> None:
@@ -27,14 +27,16 @@ def test_overrides_flips_and_locations() -> None:
             "--flip", "1",
             "--locations", "1.1,1.2,1.3",
             "--fps", "15",
-            "--no-lock-exposure",
+            "--lock-exposure",
+            "--lock-white-balance",
         ]
     )
     cfg = ingest_config_from_args(args)
     assert cfg.location_index_overrides == {"7.2": 0, "7.3": 2}
     assert [s.rotate_180 for s in cfg.slots] == [False, True, False]
     assert [s.location for s in cfg.slots] == ["1.1", "1.2", "1.3"]
-    assert cfg.capture.fps == 15 and not cfg.capture.lock_exposure
+    assert cfg.capture.fps == 15
+    assert cfg.capture.lock_exposure and cfg.capture.lock_white_balance
 
 
 def test_synthetic_flag_parses() -> None:
