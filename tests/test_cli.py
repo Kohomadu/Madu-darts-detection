@@ -51,6 +51,8 @@ def test_record_and_replay_subcommands_parse() -> None:
     assert rec.command == "record"
     assert rec.board == "http://board:3180"
     assert rec.frames == "none"
+    ad = build_parser().parse_args(["record", "--frames", "autodarts", "--warp"])
+    assert ad.frames == "autodarts" and ad.warp is True
     rep = build_parser().parse_args(["replay", "recordings/session"])
     assert rep.command == "replay"
     assert str(rep.recording).replace("\\", "/").endswith("recordings/session")

@@ -16,7 +16,7 @@ First milestone: local Python three-cam detection process + Calibration / Detect
 - Camera ingest ([03](issues/03-camera-ingest.md) resolved): `CameraIngest` in `src/madu_darts/cameras/` — USB location identity (7.2/7.3/7.4), 1280×720@30, exposure/WB lock; by-path on Linux, index overrides on Windows.
 - Calibration every startup ([04](issues/04-calibration-startup.md) resolved): LAN Calibration view on `:3181` — auto-suggest / rotate-20 / warped-board PASS+RMS / Accept gate; live Board accepted all three cams (RMS ~0.7–1.3 mm). Orange-aware autofit on `main`.
 - Live throw schema ([06](issues/06-live-throw-schema-confirm.md) resolved): Autodarts 2.1.0 still exposes stuck-dart `throws[]` on local `/api/state` + WS `state` events (flat fields: `coordsX/Y`, `segmentName`, `method: UnanimousCam`). inventwo “cloud-only throws” is wrong here. Capture under `captures/06-live-throw-2026-11-02/`.
-- Visit recorder + shadow-compare ([07](issues/07-visit-recorder-shadow-compare.md) resolved): `madu-darts record` / `replay`; `coordsX/Y` = mm÷170; live session [captures/recordings/2026-11-02T07-45-16Z/](captures/recordings/2026-11-02T07-45-16Z/) (10 visits / 28 darts incl. D16+T4; throws-only from Windows — re-record with `--frames local` on the Board before 08–09 CV). Echo stub replay 100%.
+- Visit recorder + shadow-compare ([07](issues/07-visit-recorder-shadow-compare.md) resolved): `madu-darts record` / `replay`; `coordsX/Y` = mm÷170; `--frames autodarts` via `/api/streams/live?cam=N` MJPEG. Preferred session [captures/recordings/2026-11-02T08-07-55Z/](captures/recordings/2026-11-02T08-07-55Z/) (8 visits / 24 darts + ~1239 JPEGs locally; meta in git, jpgs gitignored).
 - **Detection pipeline plan (2026-11-02)**: checklist §4–14 sliced into grouped, live-testable tickets, each gated on the one before:
   [07](issues/07-visit-recorder-shadow-compare.md) recorder + shadow-compare (auto) →
   [08](issues/08-motion-gate-settle.md) background/motion/settle (auto) →
@@ -29,5 +29,5 @@ First milestone: local Python three-cam detection process + Calibration / Detect
 
 - Homography-only vs later PnP/triangulation if doubles are noisy.
 - Learned tip detector only if 09’s classical gate is missed (decided classical-first).
-- Cam JPEGs for 07 session empty (Windows `--frames none`); need Board-side `--frames local`/`madu` before motion/tip tickets.
+- (cleared) 07 cam-frame gap — Autodarts MJPEG streams work from Windows.
 - Windows USB device identity stability for the three cams (Linux board uses USB location `7.2/7.3/7.4`) — ingest supports `location_index_overrides` until a stable Windows enumerator exists.

@@ -43,6 +43,7 @@
 | `GET /api/config/cam/resolution` | Active res | `{width:1280,height:720}` |
 | `GET /api/config/calibration/ellipses` | Fitted ring geometry per cam | cams `"0"|"1"|"2"`: `bull[x,y]`, `doubleInner/Outer`, `trebleInner/Outer` each `{angle,x,y,width,height}`, plus 20-point rings `*Points` |
 | `GET /api/cams/controls/{0\|1\|2}` | UVC controls | brightness, contrast, hue, saturation, sharpness, gamma, backlight, powerLineFrequency, WB, exposure… |
+| `GET /api/streams/live?cam={0\|1\|2}` | Live cam MJPEG | `multipart/x-mixed-replace; boundary=advisionmjpg` (Board Manager cameras page). Optional `&warp=true`, `&update=onDart`. |
 | `GET /` | Legacy Board Manager shell | HTML loads `autodarts-web.js` + `autodarts-web.wasm` (Emscripten UI, not a REST route map) |
 | `GET /autodarts-web.js` / `.wasm` | WASM UI | ~8.5 MB wasm; algorithms not readable as source |
 

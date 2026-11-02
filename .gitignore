@@ -8,3 +8,6 @@ build/
 .venv/
 venv/
 *.egg
+
+# Visit-recording cam frames are large (~200MB/session); meta.json stays tracked.
+.scratch/detection-tool/captures/recordings/**/*.jpg

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -34,11 +35,14 @@ class VisitRecorder:
         self._frames = frames or NullFrameSource()
         self._writer = SessionWriter(Path(out_dir), board_url=board.board_url)
         self._ring = FrameRingBuffer(window_s=ring_window_s)
+        self._sample_fps = sample_fps
         self._sampler = RingSampler(self._frames, self._ring, fps=sample_fps)
         self._segmenter = VisitSegmenter()
         self._poll_hz = poll_hz
         self._calibration = calibration
         self._visit_open = False
+        self._sample_stop = threading.Event()
+        self._sample_thread: threading.Thread | None = None
 
     @property
     def session_dir(self) -> Path:
@@ -64,7 +68,27 @@ class VisitRecorder:
                 calib = {"source": "none", "error": str(exc)}
         self._writer.write_calibration(calib)
         self._frames.start()
+        self._start_sampler()
         return self.session_dir
+
+    def _start_sampler(self) -> None:
+        if isinstance(self._frames, NullFrameSource):
+            return
+        self._sample_stop.clear()
+
+        def _loop() -> None:
+            interval = 1.0 / max(self._sample_fps, 0.1)
+            while not self._sample_stop.wait(interval):
+                self._sampler.tick()
+
+        self._sample_thread = threading.Thread(target=_loop, name="madu-ring-sampler", daemon=True)
+        self._sample_thread.start()
+
+    def _stop_sampler(self) -> None:
+        self._sample_stop.set()
+        if self._sample_thread is not None:
+            self._sample_thread.join(timeout=2.0)
+            self._sample_thread = None
 
     def run(self, *, duration_s: float | None = None) -> Path:
         """Block until Ctrl-C / duration, writing visits as they close."""
@@ -72,11 +96,11 @@ class VisitRecorder:
         log.info("recording session at %s (board %s)", self.session_dir, self._board.board_url)
         try:
             for state in self._board.poll_states(hz=self._poll_hz, stop_after_s=duration_s):
-                self._sampler.tick(state.t_mono)
                 self.handle_state(state.t_mono, state.t_recv, state.throws, state.status, state.event)
         except KeyboardInterrupt:
             log.info("recording stopped by user")
         finally:
+            self._stop_sampler()
             if self._visit_open:
                 # Force-close so partial visits still get a meta.json.
                 self._writer.end_visit(time.monotonic())

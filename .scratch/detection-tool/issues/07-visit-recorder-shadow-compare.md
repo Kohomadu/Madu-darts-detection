@@ -49,8 +49,8 @@ Shipped the dev-only recorder + shadow-compare harness; live session captured; c
 Autodarts `coordsX/Y` = Board-plane mm ÷ **170** (`DOUBLE_OUTER_MM`). Documented in `COORDS_NORM_RADIUS_MM` + research §2.2; verified against live S18/S20/S14 beds.
 
 ### Live recording
-[captures/recordings/2026-11-02T07-45-16Z/](../captures/recordings/2026-11-02T07-45-16Z/) — **10 visits / 28 darts** incl. **D16**, **T4**, outer bull `25`, misses. Autodarts ellipses saved as `calibration.json`.  
-`madu-darts replay` → **28/28 (100%)** agreement with echo stub.
+- Preferred (with pixels): [captures/recordings/2026-11-02T08-07-55Z/](../captures/recordings/2026-11-02T08-07-55Z/) — **8 visits / 24 darts** incl. **T19**, **D13**, **T20**, bulls; **~1239 JPEGs** from Autodarts MJPEG. Echo replay **24/24**. JPEGs gitignored (~198 MB); meta tracked.
+- Earlier throws-only: [captures/recordings/2026-11-02T07-45-16Z/](../captures/recordings/2026-11-02T07-45-16Z/) — superseded.
 
-### Gap (frames)
-Session recorded from Windows with `--frames none` (Autodarts holds USB cams; Madu `:3181` was down). Visit trees have empty `cam{0,1,2}/`. Re-record on the Board with `--frames local` (or `--frames madu` once `:3181` owns feeds) before tickets 08–09 need real pixels; labels + coords are enough for stub replay and state-machine work.
+### Frames (gap closed)
+Autodarts already re-exports cams over LAN as MJPEG: `GET /api/streams/live?cam=0|1|2` (same as `?page=cameras`). Recorder `--frames autodarts` pulls those from Windows without USB ownership. Optional `?warp=true` via `--warp`.

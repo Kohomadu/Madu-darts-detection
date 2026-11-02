@@ -1,15 +1,18 @@
-"""Frame sources for the visit recorder (local cams or Madu JPEG feeds)."""
+"""Frame sources for the visit recorder (local cams, Madu, or Autodarts MJPEG)."""
 
 from __future__ import annotations
 
 import logging
+import threading
 import time
+import urllib.error
 import urllib.request
 from typing import Any, Protocol
 
 import numpy as np
 
 from madu_darts.cameras import CameraIngest, IngestConfig
+from madu_darts.record.mjpeg import extract_jpeg_frames
 from madu_darts.server.service import FramePump
 
 log = logging.getLogger(__name__)
@@ -97,6 +100,89 @@ class MaduFeedFrameSource:
             except Exception as exc:
                 log.debug("madu feed %s failed: %s", url, exc)
         return out
+
+
+class AutodartsStreamFrameSource:
+    """Background readers for Autodarts ``GET /api/streams/live?cam=N`` MJPEG.
+
+    Same feeds the Board Manager cameras page uses — reachable from Windows over
+    the LAN without opening USB devices.
+    """
+
+    def __init__(
+        self,
+        board_url: str,
+        *,
+        slots: tuple[int, ...] = (0, 1, 2),
+        warp: bool = False,
+        reconnect_s: float = 2.0,
+    ) -> None:
+        self._base = board_url.rstrip("/")
+        self._slots = slots
+        self._warp = warp
+        self._reconnect_s = reconnect_s
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._latest: dict[int, np.ndarray] = {}
+        self._threads: list[threading.Thread] = []
+
+    def start(self) -> None:
+        if self._threads:
+            raise RuntimeError("AutodartsStreamFrameSource already started")
+        self._stop.clear()
+        for slot in self._slots:
+            thread = threading.Thread(
+                target=self._run_slot,
+                name=f"madu-ad-mjpeg-{slot}",
+                args=(slot,),
+                daemon=True,
+            )
+            thread.start()
+            self._threads.append(thread)
+
+    def stop(self) -> None:
+        self._stop.set()
+        for thread in self._threads:
+            thread.join(timeout=2.0)
+        self._threads.clear()
+
+    def latest(self) -> dict[int, np.ndarray]:
+        with self._lock:
+            return {slot: image for slot, image in self._latest.items()}
+
+    def _stream_url(self, slot: int) -> str:
+        url = f"{self._base}/api/streams/live?cam={int(slot)}"
+        if self._warp:
+            url += "&warp=true"
+        return url
+
+    def _run_slot(self, slot: int) -> None:
+        import cv2
+
+        while not self._stop.is_set():
+            url = self._stream_url(slot)
+            try:
+                with urllib.request.urlopen(url, timeout=30) as resp:
+                    buf = b""
+                    while not self._stop.is_set():
+                        chunk = resp.read(16384)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        frames, buf = extract_jpeg_frames(buf)
+                        if len(buf) > 8_000_000:
+                            buf = buf[-1_000_000:]
+                        for jpeg in frames:
+                            image = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                            if image is None:
+                                continue
+                            with self._lock:
+                                self._latest[slot] = image
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                if not self._stop.is_set():
+                    log.warning("Autodarts MJPEG cam %s failed: %s", slot, exc)
+            if not self._stop.is_set():
+                self._stop.wait(self._reconnect_s)
 
 
 class RingSampler:

@@ -71,11 +71,16 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--out", type=Path, default=Path("recordings"), help="output root for sessions")
     record.add_argument(
         "--frames",
-        choices=("none", "local", "madu"),
+        choices=("none", "local", "madu", "autodarts"),
         default="none",
-        help="frame source: none=throws-only, local=USB via FramePump, madu=JPEG from --madu",
+        help="frame source: none|local USB|madu JPEG|--frames autodarts MJPEG from board /api/streams/live",
     )
     record.add_argument("--madu", default="http://127.0.0.1:3181", help="Madu :3181 base URL when --frames madu")
+    record.add_argument(
+        "--warp",
+        action="store_true",
+        help="when --frames autodarts, request warped streams (?warp=true)",
+    )
     record.add_argument("--poll-hz", type=float, default=5.0)
     record.add_argument("--sample-fps", type=float, default=10.0)
     record.add_argument("--duration", type=float, default=None, help="stop after N seconds (default: until Ctrl-C)")
@@ -107,12 +112,19 @@ def ingest_config_from_args(args: argparse.Namespace) -> IngestConfig:
 
 
 def _frame_source_from_args(args: argparse.Namespace):
-    from madu_darts.record.frames import LocalPumpFrameSource, MaduFeedFrameSource, NullFrameSource
+    from madu_darts.record.frames import (
+        AutodartsStreamFrameSource,
+        LocalPumpFrameSource,
+        MaduFeedFrameSource,
+        NullFrameSource,
+    )
 
     if args.frames == "local":
         return LocalPumpFrameSource(ingest_config_from_args(args), fps=args.sample_fps)
     if args.frames == "madu":
         return MaduFeedFrameSource(args.madu)
+    if args.frames == "autodarts":
+        return AutodartsStreamFrameSource(args.board, warp=bool(args.warp))
     return NullFrameSource()
 
 
