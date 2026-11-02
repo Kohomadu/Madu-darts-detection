@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 
 from madu_darts.calibration import AutoFitParams, CalibrationSession
+from madu_darts.calibration.mount import DEFAULT_OFFSET_STORE, DEFAULT_ROTATE_OFFSETS
 from madu_darts.cameras import CameraIngest, CamFrame, IngestConfig
 from madu_darts.hits import FusionConfig, Hit, HitDetector, TipConfig
 from madu_darts.motion import BoardModel, MotionConfig, MotionGate, SettledChange
@@ -48,6 +49,10 @@ class ServiceConfig:
     #: On-disk frame packs under ``captures/live/`` (auto on 3rd Hit + ``POST /api/capture``).
     max_captures: int = 30
     capture_root: str | None = None
+    #: After autofit, apply these rotate-20 offsets (Board ring mounts). ``None`` → ticket 13 defaults.
+    rotate_offsets: dict[int, int] | None = None
+    #: Persist last Accepted offsets here (re-applied on next suggest). ``None`` disables.
+    offset_store: str | None = str(DEFAULT_OFFSET_STORE)
 
 
 class FramePump(threading.Thread):
@@ -119,7 +124,13 @@ class DetectionService:
         self._config = config or ServiceConfig()
         self._ingest_factory: IngestFactory = ingest_factory or (lambda cfg: CameraIngest(cfg))
         slots = tuple(s.slot for s in self._config.ingest.slots)
-        self.session = session or CalibrationSession(slots, params=self._config.autofit)
+        offsets = self._config.rotate_offsets if self._config.rotate_offsets is not None else dict(DEFAULT_ROTATE_OFFSETS)
+        self.session = session or CalibrationSession(
+            slots,
+            params=self._config.autofit,
+            default_rotate_offsets=offsets,
+            offset_store=self._config.offset_store,
+        )
         self.board_model = BoardModel(slots)
         self.motion_gate = MotionGate(self.board_model, self._config.motion, slots=slots)
         self.hit_detector = HitDetector(

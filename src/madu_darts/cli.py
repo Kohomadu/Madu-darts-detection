@@ -69,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="with --synthetic: loop a scripted visit (3 darts, hand, empty) to exercise the Detection view",
     )
+    serve.add_argument(
+        "--rotate-offsets",
+        default=None,
+        help="comma-separated rotate-20 offsets for cams 0,1,2 after autofit (default: Board mounts 10,4,16)",
+    )
     serve.add_argument("--log-level", default="info")
 
     record = sub.add_parser("record", help="record Autodarts visits + cam frames (dev tool)")
@@ -191,7 +196,15 @@ def main(argv: list[str] | None = None) -> int:
 
         from madu_darts.server import DetectionService, ServiceConfig, create_app
 
-        config = ServiceConfig(ingest=ingest_config_from_args(args), stream_fps=args.stream_fps)
+        rotate_offsets = None
+        if args.rotate_offsets:
+            parts = [int(p) for p in str(args.rotate_offsets).split(",") if p.strip()]
+            rotate_offsets = {slot: parts[slot] for slot in range(len(parts))}
+        config = ServiceConfig(
+            ingest=ingest_config_from_args(args),
+            stream_fps=args.stream_fps,
+            rotate_offsets=rotate_offsets,
+        )
         ingest_factory = None
         if args.synthetic or args.synthetic_throws:
             from madu_darts.server.synthetic_ingest import SyntheticIngest

@@ -8,8 +8,11 @@ Hit pipeline must go through, so no Accept -> no Hits.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -17,6 +20,9 @@ import numpy as np
 from madu_darts.calibration.autofit import AutoFitError, AutoFitParams, suggest
 from madu_darts.calibration.homography import image_to_board_mm
 from madu_darts.calibration.model import CalibrationNotAccepted, CamCalibration, FitStatus
+from madu_darts.calibration.mount import load_rotate_offsets, save_rotate_offsets
+
+log = logging.getLogger(__name__)
 
 ACCEPTABLE = frozenset({FitStatus.PASS, FitStatus.WARN})
 
@@ -40,12 +46,18 @@ class CalibrationSession:
         *,
         params: AutoFitParams | None = None,
         suggester: Suggester = suggest,
+        default_rotate_offsets: Mapping[int, int] | None = None,
+        offset_store: Path | str | None = None,
     ) -> None:
         self._slots = tuple(int(s) for s in slots)
         if not self._slots:
             raise ValueError("CalibrationSession needs at least one slot")
         self._params = params
         self._suggester = suggester
+        self._offset_store = None if offset_store is None else Path(offset_store)
+        # Empty defaults unless the product wiring (DetectionService) passes the Board mounts.
+        defaults = dict(default_rotate_offsets or {})
+        self._rotate_offsets = load_rotate_offsets(self._offset_store, defaults=defaults)
         self._lock = threading.RLock()
         self._cals: dict[int, CamCalibration] = {s: CamCalibration(slot=s) for s in self._slots}
         self._errors: dict[int, str | None] = {s: None for s in self._slots}
@@ -88,11 +100,18 @@ class CalibrationSession:
     # --- mutate (any change to a cam revokes Accept) ---
 
     def suggest(self, slot: int, image: np.ndarray) -> CamCalibration:
-        """Run auto-fit for one cam; a failure leaves the cam at ``none`` with a reason."""
+        """Run auto-fit for one cam; a failure leaves the cam at ``none`` with a reason.
+
+        On success, applies the mount / last-Accepted ``rotate_offset`` for this slot
+        so ring cams land on physical 20 without arrow presses (ticket 13).
+        """
         slot = self._check(slot)
         try:
             cal = self._suggester(image, slot, self._params)
             error: str | None = None
+            offset = int(self._rotate_offsets.get(slot, 0)) % 20
+            if cal.has_fit and offset:
+                cal = replace(cal, rotate_offset=offset)
         except AutoFitError as exc:
             cal = CamCalibration(slot=slot)
             error = exc.reason
@@ -146,6 +165,14 @@ class CalibrationSession:
             if blockers:
                 raise AcceptBlocked(blockers)
             self._accepted = True
+            # Remember what the operator signed off on for the next autofit.
+            self._rotate_offsets = {slot: self._cals[slot].rotate_offset for slot in self._slots if self._cals[slot].has_fit}
+            store = self._offset_store
+        if store is not None and self._rotate_offsets:
+            try:
+                save_rotate_offsets(store, self._rotate_offsets)
+            except OSError as exc:
+                log.warning("could not save rotate offsets to %s: %s", store, exc)
 
     def reset(self) -> None:
         """Revoke Accept (fits are kept so the operator can re-check and re-Accept)."""

@@ -85,7 +85,11 @@ class Factory:
 
 def make_client(factory: Factory | None = None) -> tuple[TestClient, DetectionService, Factory]:
     factory = factory or Factory()
-    service = DetectionService(ServiceConfig(first_frame_timeout_s=2.0, stream_fps=50.0), ingest_factory=factory)
+    # Empty rotate_offsets: synthetic cams need offset 0 from autofit; Board mounts are ticket 13.
+    service = DetectionService(
+        ServiceConfig(first_frame_timeout_s=2.0, stream_fps=50.0, rotate_offsets={}, offset_store=None),
+        ingest_factory=factory,
+    )
     client = TestClient(create_app(service))
     return client, service, factory
 
@@ -453,7 +457,9 @@ def test_devices_listed_even_when_cameras_closed() -> None:
 
 def test_service_stop_is_idempotent_and_frames_empty_after_stop() -> None:
     factory = Factory()
-    service = DetectionService(ServiceConfig(first_frame_timeout_s=1.0), ingest_factory=factory)
+    service = DetectionService(
+        ServiceConfig(first_frame_timeout_s=1.0, rotate_offsets={}, offset_store=None), ingest_factory=factory
+    )
     service.start()
     assert set(service.latest_frames()) == {0, 1, 2}
     service.stop()
@@ -465,7 +471,9 @@ def test_service_stop_is_idempotent_and_frames_empty_after_stop() -> None:
 
 def test_service_recalibrate_single_slot_without_frame_marks_missing() -> None:
     factory = Factory(frames={0: CAMS[0].image, 1: CAMS[1].image})
-    service = DetectionService(ServiceConfig(first_frame_timeout_s=0.3), ingest_factory=factory)
+    service = DetectionService(
+        ServiceConfig(first_frame_timeout_s=0.3, rotate_offsets={}, offset_store=None), ingest_factory=factory
+    )
     service.start()
     try:
         snap = service.recalibrate(2)

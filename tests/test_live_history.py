@@ -29,7 +29,13 @@ def _wait_throws(client: TestClient, n: int, timeout_s: float = 8.0) -> dict:
 def live_client(tmp_path: Path):
     factory = Factory()
     service = DetectionService(
-        ServiceConfig(first_frame_timeout_s=2.0, stream_fps=50.0, capture_root=str(tmp_path / "live")),
+        ServiceConfig(
+            first_frame_timeout_s=2.0,
+            stream_fps=50.0,
+            capture_root=str(tmp_path / "live"),
+            rotate_offsets={},
+            offset_store=None,
+        ),
         ingest_factory=factory,
     )
     client = TestClient(create_app(service))

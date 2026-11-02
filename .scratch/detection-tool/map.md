@@ -31,6 +31,7 @@ First milestone: local Python three-cam detection process + Calibration / Detect
 
 ## Fog
 
+- Autofit suggested-20 vs ring mounts ([13](issues/13-autofit-rotate20-mount-bias.md) resolved): Board defaults `{0:10,1:4,2:16}` applied after every suggest; last Accepted offsets persisted to `captures/calibration_offsets.json`. Live 2026-11-02 observation (cam0 opposite / cam1 +4 left / cam2 +4 right) matched the 09 recording bind.
 - Homography-only vs later PnP/triangulation if doubles are noisy.
 - Learned tip detector only if 09’s classical gate is missed (decided classical-first) — gate narrowly missed on singles with n=18; [12](issues/12-learned-tip-detector.md) asks for more labelled data before any model.
 - Ring radii: Autodarts’ labelled throws imply treble-inner ≤ 97.0 mm and double ≈ 167 mm (coords × 170) vs Madu WDF 99.4 / 162–170 — wire-centre vs wire-edge? Revisit `board.geometry` once ≥ 20 labelled D/T darts exist.

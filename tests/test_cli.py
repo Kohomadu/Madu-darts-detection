@@ -43,6 +43,7 @@ def test_synthetic_flag_parses() -> None:
     assert build_parser().parse_args(["serve", "--synthetic"]).synthetic is True
     assert build_parser().parse_args(["serve"]).synthetic is False
     assert build_parser().parse_args(["serve", "--synthetic-throws"]).synthetic_throws is True
+    assert build_parser().parse_args(["serve", "--rotate-offsets", "10,4,16"]).rotate_offsets == "10,4,16"
 
 
 def test_record_and_replay_subcommands_parse() -> None:

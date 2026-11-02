@@ -14,3 +14,5 @@ venv/
 
 # Live auto/manual captures from DetectionService (JPEG + state.json).
 captures/live/
+# Last Accepted rotate-20 offsets (machine-local).
+captures/calibration_offsets.json
