@@ -22,6 +22,10 @@
   .cam .top b { font-weight:600; }
   .badge { padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; color:#111; background:var(--none); }
   .badge.pass { background:var(--pass); } .badge.warn { background:var(--warn); } .badge.fail { background:var(--fail); color:#fff; } .badge.none { background:var(--none); color:#fff; }
+  .motion-tile { display:inline-block; width:14px; height:14px; border-radius:3px; background:#4b5563; border:1px solid #111; vertical-align:middle; margin-left:8px; }
+  .motion-tile.idle { background:#4b5563; }
+  .motion-tile.motion, .motion-tile.settling { background:#e6c200; }
+  .motion-tile.stable { background:#3cc85a; }
   .feed { display:block; width:100%; aspect-ratio:16/9; background:#000; object-fit:contain; }
   .row { display:flex; gap:8px; align-items:center; padding:8px 10px; }
   .row .grow { flex:1; }
@@ -100,7 +104,7 @@
     for (const s of config.slots) {
       const el = document.createElement('article'); el.className = 'cam';
       el.innerHTML = `
-        <div class="top"><b>Cam ${s.slot} <code>USB ${s.location}</code></b><span class="badge none" data-badge>none</span></div>
+        <div class="top"><b>Cam ${s.slot} <code>USB ${s.location}</code></b><span><span class="badge none" data-badge>none</span><span class="motion-tile idle" data-motion title="motion: idle"></span></span></div>
         <img class="feed" data-feed alt="camera ${s.slot}" src="/stream/${s.slot}.mjpg">
         <div class="row">
           <button data-left title="Move 20 one field left">◀ 20</button>
@@ -166,11 +170,25 @@
     for (const slot of slots) { const img = $('[data-feed]', tiles[slot]); img.src = `/stream/${slot}.mjpg?t=${Date.now()}`; }
   }
 
+  function renderMotion(motion) {
+    if (!motion || !motion.cams) return;
+    for (const slot of slots) {
+      const el = tiles[slot]; if (!el) continue;
+      const tile = $('[data-motion]', el); if (!tile) continue;
+      const cam = motion.cams[String(slot)];
+      const phase = (cam && cam.phase) || 'idle';
+      tile.className = `motion-tile ${phase}`;
+      const px = cam ? cam.changedPixels : 0;
+      tile.title = motion.enabled ? `motion: ${phase} · ${px} px` : 'motion: gated (Accept calibration)';
+    }
+  }
+
   async function poll() {
     try {
       render(await api('GET', '/api/calibration'));
       const st = await api('GET', '/api/cams/stats');
       $('#stats').textContent = st.cams.length ? st.cams.map(c => `cam ${c.slot}: ${c.width}×${c.height}@${c.fps}`).join(' · ') + ` · pump ${st.pumpFps} fps` : (st.error || 'cameras closed');
+      renderMotion(await api('GET', '/api/state/motion'));
     } catch (e) { $('#banner').className = 'error'; $('#banner').textContent = `Service unreachable: ${e.message}`; }
   }
 

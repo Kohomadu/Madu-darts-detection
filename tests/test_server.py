@@ -137,6 +137,34 @@ def test_rotate_without_fit_is_conflict() -> None:
         assert client.post("/api/calibration/0/rotate-left").status_code == 409
 
 
+def test_motion_config_and_state_endpoints() -> None:
+    client, service, _ = make_client()
+    with client:
+        cfg = client.get("/api/config").json()
+        assert cfg["motion"]["stableNumFrames"] == 3
+        assert cfg["motion"]["scale"] == 4.0
+        assert cfg["motion"]["threshold"] == 16
+        assert cfg["motion"]["kernel"] == 3
+
+        motion = client.get("/api/state/motion").json()
+        assert motion["enabled"] is False
+        assert set(motion["cams"]) == {"0", "1", "2"}
+        assert motion["cams"]["0"]["phase"] == "idle"
+
+        for slot, cam in CAMS.items():
+            for _ in range(cam.correct_offset):
+                client.post(f"/api/calibration/{slot}/rotate-left")
+        assert client.post("/api/calibration/accept").status_code == 200
+
+        motion = client.get("/api/state/motion").json()
+        assert motion["enabled"] is True
+        assert service.board_model.has_reference(0)
+        assert "Calibration" in client.get("/").text and "data-motion" in client.get("/").text
+
+        client.post("/api/calibration/reset")
+        assert client.get("/api/state/motion").json()["enabled"] is False
+
+
 def test_accept_flow_and_revocation() -> None:
     client, service, _ = make_client()
     with client:

@@ -17,16 +17,19 @@ import numpy as np
 
 from madu_darts.calibration import AutoFitParams, CalibrationSession
 from madu_darts.cameras import CameraIngest, CamFrame, IngestConfig
+from madu_darts.motion import BoardModel, MotionConfig, MotionGate, SettledChange
 
 log = logging.getLogger(__name__)
 
 IngestFactory = Callable[[IngestConfig], CameraIngest]
+FrameListener = Callable[[float, dict[int, CamFrame]], None]
 
 
 @dataclass(frozen=True)
 class ServiceConfig:
     ingest: IngestConfig = field(default_factory=IngestConfig)
     autofit: AutoFitParams | None = None
+    motion: MotionConfig = field(default_factory=MotionConfig)
     first_frame_timeout_s: float = 3.0
     stream_fps: float = 10.0
     jpeg_quality: int = 80
@@ -35,7 +38,13 @@ class ServiceConfig:
 class FramePump(threading.Thread):
     """Background reader keeping the latest frame per slot."""
 
-    def __init__(self, ingest: CameraIngest, fps: float) -> None:
+    def __init__(
+        self,
+        ingest: CameraIngest,
+        fps: float,
+        *,
+        on_frames: FrameListener | None = None,
+    ) -> None:
         super().__init__(name="madu-frame-pump", daemon=True)
         self._ingest = ingest
         self._interval = 1.0 / max(fps, 1.0)
@@ -44,6 +53,7 @@ class FramePump(threading.Thread):
         self._stop_event = threading.Event()
         self._count = 0
         self._started_at = time.monotonic()
+        self._on_frames = on_frames
         self.error: str | None = None
 
     def run(self) -> None:
@@ -60,6 +70,11 @@ class FramePump(threading.Thread):
                 with self._lock:
                     self._latest.update(frames)
                     self._count += 1
+                if self._on_frames is not None:
+                    try:
+                        self._on_frames(time.monotonic(), frames)
+                    except Exception as exc:
+                        log.warning("frame listener failed: %s", exc)
             elapsed = time.monotonic() - started
             self._stop_event.wait(max(0.0, self._interval - elapsed))
 
@@ -90,6 +105,8 @@ class DetectionService:
         self._ingest_factory: IngestFactory = ingest_factory or (lambda cfg: CameraIngest(cfg))
         slots = tuple(s.slot for s in self._config.ingest.slots)
         self.session = session or CalibrationSession(slots, params=self._config.autofit)
+        self.board_model = BoardModel(slots)
+        self.motion_gate = MotionGate(self.board_model, self._config.motion, slots=slots)
         self._ingest: CameraIngest | None = None
         self._pump: FramePump | None = None
         self._lock = threading.RLock()
@@ -107,6 +124,7 @@ class DetectionService:
 
     def stop(self) -> None:
         with self._lock:
+            self.motion_gate.set_enabled(False)
             if self._pump is not None:
                 self._pump.stop()
                 self._pump.join(timeout=2.0)
@@ -120,6 +138,7 @@ class DetectionService:
 
     def reopen_cameras(self) -> bool:
         """(Re)open the cams from the current config; returns True when frames are flowing."""
+        was_accepted = self.session.accepted
         self.stop()
         with self._lock:
             try:
@@ -131,7 +150,11 @@ class DetectionService:
                 return False
             self._ingest = ingest
             self.camera_error = None
-            pump = FramePump(ingest, fps=float(self._config.ingest.capture.fps))
+            pump = FramePump(
+                ingest,
+                fps=float(self._config.ingest.capture.fps),
+                on_frames=self._on_pump_frames,
+            )
             pump.start()
             self._pump = pump
 
@@ -139,12 +162,22 @@ class DetectionService:
         wanted = set(self.session.slots)
         while time.monotonic() < deadline:
             if wanted <= set(pump.latest()):
+                if was_accepted and self.session.accepted:
+                    self.arm_motion_from_latest()
                 return True
             time.sleep(0.02)
         if not pump.latest():
             self.camera_error = pump.error or "cameras opened but delivered no frames"
             return False
+        if was_accepted and self.session.accepted:
+            self.arm_motion_from_latest()
         return True
+
+    def _on_pump_frames(self, t_mono: float, frames: dict[int, CamFrame]) -> None:
+        if not self.session.accepted:
+            return
+        images = {slot: frame.image for slot, frame in frames.items()}
+        self.motion_gate.process_frames(images, t_mono)
 
     # --- frames ---
 
@@ -156,6 +189,54 @@ class DetectionService:
 
     def frame(self, slot: int) -> np.ndarray | None:
         return self.latest_frames().get(slot)
+
+    # --- motion / settle ---
+
+    def arm_motion_from_latest(self) -> None:
+        """Capture empty-Board references and enable the motion gate (post-Accept)."""
+        frames = self.latest_frames()
+        if not frames:
+            log.warning("arm_motion_from_latest: no frames yet")
+            return
+        self.board_model.capture_all(frames)
+        self.motion_gate.reset()
+        self.motion_gate.set_enabled(True)
+
+    def on_calibration_accepted(self) -> None:
+        self.session.require_accepted()
+        self.arm_motion_from_latest()
+
+    def on_calibration_reset(self) -> None:
+        self.motion_gate.set_enabled(False)
+        self.motion_gate.reset()
+        self.board_model.reset()
+
+    def sync_motion_with_calibration(self) -> None:
+        """Enable the gate only while Calibration is Accepted; park it otherwise."""
+        if self.session.accepted:
+            if not self.motion_gate.enabled:
+                self.arm_motion_from_latest()
+        else:
+            self.on_calibration_reset()
+
+    def motion_state(self) -> dict[str, Any]:
+        snap = self.motion_gate.snapshot()
+        snap["enabled"] = bool(snap["enabled"] and self.session.accepted)
+        return snap
+
+    def drain_settled(self) -> list[SettledChange]:
+        return self.motion_gate.drain_events()
+
+    def api_config(self) -> dict[str, Any]:
+        """Madu ``GET /api/config`` — motion knobs + cam summary."""
+        return {
+            "motion": self._config.motion.to_api(),
+            "cam": {
+                "fps": self._config.ingest.capture.fps,
+                "width": self._config.ingest.capture.width,
+                "height": self._config.ingest.capture.height,
+            },
+        }
 
     # --- calibration ---
 
@@ -169,6 +250,9 @@ class DetectionService:
                 self.session.clear(slot, "no frame from camera")
             else:
                 self.session.suggest(slot, image)
+        # Any calibration change revokes Accept (session) — park the detector.
+        if not self.session.accepted:
+            self.on_calibration_reset()
         return self.session.snapshot()
 
     # --- cameras ---

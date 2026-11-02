@@ -99,6 +99,14 @@ def create_app(service: DetectionService) -> FastAPI:
             "cameras": {"open": service.cam_config()["camerasOpen"], "error": service.camera_error},
         }
 
+    @app.get("/api/state/motion")
+    def motion_state() -> dict[str, Any]:
+        return service.motion_state()
+
+    @app.get("/api/config")
+    def api_config() -> dict[str, Any]:
+        return service.api_config()
+
     # --- cameras ---
 
     @app.get("/api/cams/devices")
@@ -140,11 +148,15 @@ def create_app(service: DetectionService) -> FastAPI:
 
     @app.post("/api/calibration/auto")
     def auto_all() -> dict[str, Any]:
-        return service.recalibrate()
+        snap = service.recalibrate()
+        service.sync_motion_with_calibration()
+        return snap
 
     @app.post("/api/calibration/auto/{slot}")
     def auto_one(slot: int) -> dict[str, Any]:
-        return service.recalibrate(check_slot(slot))
+        snap = service.recalibrate(check_slot(slot))
+        service.sync_motion_with_calibration()
+        return snap
 
     @app.post("/api/calibration/{slot}/rotate-left")
     def rotate_left(slot: int) -> dict[str, Any]:
@@ -159,6 +171,7 @@ def create_app(service: DetectionService) -> FastAPI:
             session.rotate_left(slot) if left else session.rotate_right(slot)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        service.sync_motion_with_calibration()
         return session.snapshot()
 
     @app.post("/api/calibration/accept")
@@ -167,11 +180,13 @@ def create_app(service: DetectionService) -> FastAPI:
             session.accept()
         except AcceptBlocked as exc:
             return JSONResponse(status_code=409, content={"detail": "accept blocked", "blockers": exc.blockers})
+        service.on_calibration_accepted()
         return JSONResponse(session.snapshot())
 
     @app.post("/api/calibration/reset")
     def reset() -> dict[str, Any]:
         session.reset()
+        service.on_calibration_reset()
         return session.snapshot()
 
     # --- images ---

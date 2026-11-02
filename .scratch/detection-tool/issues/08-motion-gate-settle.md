@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Type: task
 Model: auto
 Blocked by: 07
@@ -33,3 +33,18 @@ Primary: [research-autodarts-behaviour.md](../research-autodarts-behaviour.md) �
 - On replay of the 07 recording, every Autodarts dart produces exactly one settled-change event per visible cam within ~0.5 s of Autodarts’ detection time; no events during still periods; takeout produces 0 settled-change events (suppressed).
 - Thresholds/scale/`stableNumFrames` live in a config dataclass and in `GET /api/config`.
 - Unit tests on synthetic frame sequences (step change, flicker, slow hand) + replay-based test.
+
+## Answer
+
+Shipped Autodarts-shaped background / motion / settle; 07 recording replay meets the settle gate; tip localizer (09) can consume `SettledChange` events.
+
+### Code
+- `madu_darts.motion`: `MotionConfig` (Autodarts defaults: scale 4, kernel 3, threshold 16, `stableNumFrames` 3), `BoardModel.reference` / `capture` / `commit`, `MotionGate` (`idle → motion → settling → stable`) emitting `SettledChange` (mask + bbox + changed pixels).
+- `DetectionService`: `FramePump` listener feeds the gate; armed on Accept (`arm_motion_from_latest`), parked on Reset / revoked Accept (`sync_motion_with_calibration`).
+- API: `GET /api/state/motion`, `GET /api/config` (motion knobs). Calibration page: per-cam Vision-like tile (gray idle / yellow motion|settling / green stable).
+- `MotionGate.flush()` pads truncated recording windows with a frozen last frame so settle can complete when the 07 ring buffer ends at Autodarts’ detection time.
+
+### Verification
+- Synthetic: step change → one settle after N quiet frames; flicker ignored; large/long motion suppressed as takeout; commit hides prior dart.
+- Replay of [2026-11-02T08-07-55Z](../captures/recordings/2026-11-02T08-07-55Z/): **24 darts × 3 cams → exactly one settled-change each**, within 0.5 s of Autodarts `t_mono`; still prefixes emit nothing.
+- Full suite: **237 passed**.
