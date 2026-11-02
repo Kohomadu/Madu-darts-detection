@@ -20,6 +20,7 @@ import numpy as np
 from madu_darts.calibration.autofit import AutoFitError, AutoFitParams, suggest, suggest_best
 from madu_darts.calibration.homography import image_to_board_mm
 from madu_darts.calibration.model import CalibrationNotAccepted, CamCalibration, FitStatus
+from madu_darts.calibration.residuals import summarize_residuals
 from madu_darts.calibration.mount import load_rotate_offsets, save_rotate_offsets
 
 log = logging.getLogger(__name__)
@@ -215,6 +216,12 @@ class CalibrationSession:
             cams: dict[str, Any] = {}
             for slot in self._slots:
                 cal = self._cals[slot]
+                residuals = (
+                    summarize_residuals(cal.residuals, cal.homography, cal.rotate_offset)
+                    if cal.residuals is not None and cal.homography is not None
+                    else None
+                )
+                far = None if residuals is None else residuals["farDouble"]
                 cams[str(slot)] = {
                     "status": cal.status.value,
                     "rotateOffset": cal.rotate_offset,
@@ -224,6 +231,11 @@ class CalibrationSession:
                     "coverage": None if cal.coverage is None else round(cal.coverage, 3),
                     "rmsDoubleMm": cal.rms_double_mm,
                     "rmsTrebleMm": cal.rms_treble_mm,
+                    "maxResidualMm": None if residuals is None else residuals["maxMm"],
+                    "maxDoubleMm": None if residuals is None or residuals["double"] is None else residuals["double"]["maxMm"],
+                    "maxTrebleMm": None if residuals is None or residuals["treble"] is None else residuals["treble"]["maxMm"],
+                    "farDouble": far,
+                    "nearDouble": None if residuals is None else residuals["nearDouble"],
                     "error": self._errors[slot],
                     "hasFit": cal.has_fit,
                 }

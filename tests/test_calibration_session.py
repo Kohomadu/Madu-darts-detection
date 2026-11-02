@@ -232,6 +232,11 @@ def test_snapshot_is_json_shaped() -> None:
         "coverage": None,
         "rmsDoubleMm": None,
         "rmsTrebleMm": None,
+        "maxResidualMm": None,
+        "maxDoubleMm": None,
+        "maxTrebleMm": None,
+        "farDouble": None,
+        "nearDouble": None,
         "error": None,
         "hasFit": True,
     }

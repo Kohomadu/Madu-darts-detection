@@ -63,7 +63,7 @@
       <button id="auto-all">Auto-calibrate all</button>
       <span id="blockers"></span>
     </div>
-    <p style="color:var(--muted);margin:10px 0 0">Per cam: Auto applies this Board's mount rotate-20 defaults (cams 0/1/2 → offsets 10/4/16) or the last Accepted offsets. Confirm the red wedge covers the physical <b>20</b> (arrows to fine-tune), and in the inset warped view the green rings sit on the wires. Then Accept.</p>
+    <p style="color:var(--muted);margin:10px 0 0">Per cam: Auto applies this Board's mount rotate-20 defaults (cams 0/1/2 → offsets 10/4/16) or the last Accepted offsets. Confirm the red wedge covers the physical <b>20</b> (arrows to fine-tune), and in the inset warped view the green rings sit on the wires. Coloured dots are measured wire residuals (green ≤ 0.75 mm, yellow ≤ 1.5, orange ≤ 3, red above); hollow rings are outliers. Magenta arcs mark the far double annulus — the foreshortened side. Then Accept.</p>
   </section>
 
   <section class="panel">
@@ -134,11 +134,23 @@
     $('#devices').textContent = (config.error ? `Camera error: ${config.error}. ` : '') + lines.join(' · ');
   }
 
+  function fitLine(c) {
+    const rms = c.rmsMm != null ? c.rmsMm.toFixed(2) : '?';
+    let text = `RMS ${rms} mm`;
+    if (c.farDouble && c.farDouble.maxMm != null) {
+      const farRms = c.farDouble.rmsMm != null ? c.farDouble.rmsMm.toFixed(2) : '?';
+      text += ` · far dbl ${farRms} (max ${c.farDouble.maxMm.toFixed(2)})`;
+    }
+    if (c.maxResidualMm != null) text += ` · max ${c.maxResidualMm.toFixed(2)}`;
+    text += ` · offset ${c.rotateOffset}`;
+    return text;
+  }
+
   function render(snap) {
     for (const slot of slots) {
       const c = snap.cams[String(slot)]; const el = tiles[slot]; if (!c || !el) continue;
       const badge = $('[data-badge]', el); badge.className = `badge ${c.status}`; badge.textContent = c.status.toUpperCase();
-      $('[data-rms]', el).textContent = c.hasFit ? `RMS ${c.rmsMm != null ? c.rmsMm.toFixed(2) : '?'} mm · offset ${c.rotateOffset}` : '';
+      $('[data-rms]', el).textContent = c.hasFit ? fitLine(c) : '';
       $('[data-err]', el).textContent = c.error || '';
     }
     const banner = $('#banner');

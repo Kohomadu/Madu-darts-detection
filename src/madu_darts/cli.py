@@ -233,7 +233,10 @@ def _cmd_calib_diag(args: argparse.Namespace) -> int:
     out_dir = Path(args.out) if args.out else None
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
-    print(f"{'cam':>3}  {'status':<6}  {'rms':>6}  {'inliers':>9}  {'cov':>5}  {'dbl':>6}  {'trb':>6}")
+    print(
+        f"{'cam':>3}  {'status':<6}  {'rms':>6}  {'inliers':>9}  {'cov':>5}  "
+        f"{'dbl':>6}  {'trb':>6}  {'max':>6}  {'far':>6}"
+    )
     for slot, image_path in pairs:
         image = cv2.imread(str(image_path))
         if image is None:
@@ -248,8 +251,19 @@ def _cmd_calib_diag(args: argparse.Namespace) -> int:
         dbl = "" if cal.rms_double_mm is None else f"{cal.rms_double_mm:6.3f}"
         trb = "" if cal.rms_treble_mm is None else f"{cal.rms_treble_mm:6.3f}"
         inl = "" if cal.n_inliers is None or cal.n_points is None else f"{cal.n_inliers}/{cal.n_points}"
+        mx, far = "", ""
+        if cal.residuals is not None and cal.homography is not None:
+            from madu_darts.calibration.residuals import summarize_residuals
+
+            summary = summarize_residuals(cal.residuals, cal.homography, cal.rotate_offset)
+            if summary["maxMm"] is not None:
+                mx = f"{summary['maxMm']:6.3f}"
+            far_band = summary["farDouble"]
+            if far_band is not None and far_band["maxMm"] is not None:
+                far = f"{far_band['maxMm']:6.3f}"
         print(
-            f"{slot:3d}  {cal.status.value:<6}  {cal.rms_mm:6.3f}  {inl:>9}  {cov:>5}  {dbl:>6}  {trb:>6}"
+            f"{slot:3d}  {cal.status.value:<6}  {cal.rms_mm:6.3f}  {inl:>9}  {cov:>5}  "
+            f"{dbl:>6}  {trb:>6}  {mx:>6}  {far:>6}"
         )
         if out_dir is not None:
             cv2.imwrite(str(out_dir / f"feed{slot}.jpg"), draw_spiderweb(image, cal))

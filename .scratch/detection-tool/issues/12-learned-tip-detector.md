@@ -1,9 +1,11 @@
 Status: needs-triage
 Type: task
 Model: premium
-Blocked by: 09
+Blocked by: 09, 26
 
 # Follow-up: close the singles gap (more labelled data first, learned tip only if it persists)
+
+**Sliced:** data/scorecard → [26](26-labelled-corpus-100.md); ONNX tip-in-crop → [27](27-onnx-tip-in-crop.md). Keep this ticket as the umbrella decision record.
 
 Opened by [09](09-tip-localization-fusion.md) because the classical tip + fusion chain landed at **83 % singles** (15/18) against the ≥ 90 % gate on the single 24-dart recording, while doubles/trebles (3/3), bulls (2/2) and median error (3.76 mm ≤ 4) passed.
 

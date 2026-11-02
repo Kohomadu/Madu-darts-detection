@@ -63,22 +63,56 @@ def _polar(radius_mm: float, angle_deg: float) -> tuple[float, float]:
     return radius_mm * math.sin(rad), radius_mm * math.cos(rad)
 
 
+def _biased_radius(radius_mm: float, angle_deg: float, far_angle_deg: float, bias_mm: float) -> float:
+    """Push a double-band radius outward toward ``far_angle_deg`` (0 on the near half)."""
+    if bias_mm == 0.0 or radius_mm < DOUBLE_INNER_MM - 0.1:
+        return radius_mm
+    delta = ((angle_deg - far_angle_deg + 180.0) % 360.0) - 180.0
+    weight = math.cos(math.radians(delta))
+    if weight <= 0.0:
+        return radius_mm
+    return radius_mm + bias_mm * weight
+
+
 def render_board(
     size_px: int = CANON_SIZE_PX,
     mm_per_px: float = CANON_MM_PER_PX,
     rotation_sectors: int = 0,
+    *,
+    far_double_bias_mm: float = 0.0,
+    far_angle_deg: float = 0.0,
 ) -> np.ndarray:
-    """BGR image of an ideal Board; sector 20 is at the top when ``rotation_sectors == 0``."""
+    """BGR image of an ideal Board; sector 20 is at the top when ``rotation_sectors == 0``.
+
+    ``far_double_bias_mm`` shifts the double annulus outward around
+    ``far_angle_deg`` (clockwise from the top of this image). The rest of the
+    Board stays on the WDF radii, so a homography cannot absorb the error —
+    used to golden-check the residual overlay on a known soft far double.
+    """
     rot_deg = SECTOR_STEP_DEG * rotation_sectors
     img = np.full((size_px, size_px, 3), _BACKDROP, dtype=np.uint8)
 
     def px(x_mm: float, y_mm: float) -> tuple[float, float]:
         return _mm_to_canon_px(x_mm, y_mm, size_px, mm_per_px)
 
-    def wedge(r_in: float, r_out: float, a0: float, a1: float, color: tuple[int, int, int]) -> None:
-        steps = 12
-        outer = [px(*_polar(r_out, a0 + (a1 - a0) * i / steps)) for i in range(steps + 1)]
-        inner = [px(*_polar(r_in, a1 - (a1 - a0) * i / steps)) for i in range(steps + 1)]
+    def wedge(
+        r_in: float,
+        r_out: float,
+        a0: float,
+        a1: float,
+        color: tuple[int, int, int],
+        *,
+        bias_radii: bool = False,
+    ) -> None:
+        steps = 16 if bias_radii else 12
+
+        def rad(radius: float, angle: float) -> float:
+            if not bias_radii:
+                return radius
+            return _biased_radius(radius, angle, far_angle_deg, far_double_bias_mm)
+
+        outer = [px(*_polar(rad(r_out, a0 + (a1 - a0) * i / steps), a0 + (a1 - a0) * i / steps)) for i in range(steps + 1)]
+        inner = [px(*_polar(rad(r_in, a1 - (a1 - a0) * i / steps), a1 - (a1 - a0) * i / steps)) for i in range(steps + 1)]
         pts = np.array(outer + inner, dtype=np.float64)
         shift = 4
         cv2.fillPoly(img, [np.round(pts * (1 << shift)).astype(np.int32)], color, lineType=cv2.LINE_AA, shift=shift)
@@ -98,14 +132,25 @@ def render_board(
         wedge(OUTER_BULL_RADIUS_MM, TREBLE_INNER_MM, a0, a1, single)
         wedge(TREBLE_INNER_MM, TREBLE_OUTER_MM, a0, a1, band)
         wedge(TREBLE_OUTER_MM, DOUBLE_INNER_MM, a0, a1, single)
-        wedge(DOUBLE_INNER_MM, DOUBLE_OUTER_MM, a0, a1, band)
+        wedge(DOUBLE_INNER_MM, DOUBLE_OUTER_MM, a0, a1, band, bias_radii=far_double_bias_mm != 0.0)
 
     circle(OUTER_BULL_RADIUS_MM, _GREEN)
     circle(INNER_BULL_RADIUS_MM, _RED)
 
     # Wires: ring circles + sector spokes from outer bull to outer double.
-    for radius in (OUTER_BULL_RADIUS_MM, TREBLE_INNER_MM, TREBLE_OUTER_MM, DOUBLE_INNER_MM, DOUBLE_OUTER_MM):
-        circle(radius, _WIRE, thickness=1)
+    ring_radii = (OUTER_BULL_RADIUS_MM, TREBLE_INNER_MM, TREBLE_OUTER_MM, DOUBLE_INNER_MM, DOUBLE_OUTER_MM)
+    if far_double_bias_mm == 0.0:
+        for radius in ring_radii:
+            circle(radius, _WIRE, thickness=1)
+    else:
+        for radius in (OUTER_BULL_RADIUS_MM, TREBLE_INNER_MM, TREBLE_OUTER_MM):
+            circle(radius, _WIRE, thickness=1)
+        for radius in (DOUBLE_INNER_MM, DOUBLE_OUTER_MM):
+            pts = [
+                px(*_polar(_biased_radius(radius, a, far_angle_deg, far_double_bias_mm), a))
+                for a in np.linspace(0.0, 360.0, 181, endpoint=False)
+            ]
+            cv2.polylines(img, [np.round(np.asarray(pts)).astype(np.int32)], True, _WIRE, 1, lineType=cv2.LINE_AA)
     for k in range(len(SECTOR_CLOCKWISE)):
         angle = SECTOR_STEP_DEG / 2.0 + SECTOR_STEP_DEG * k + rot_deg
         p0 = px(*_polar(OUTER_BULL_RADIUS_MM, angle))
@@ -160,8 +205,17 @@ def synthetic_camera(
     rotation_sectors: int = 0,
     size_px: int = CANON_SIZE_PX,
     mm_per_px: float = CANON_MM_PER_PX,
+    *,
+    far_double_bias_mm: float = 0.0,
+    far_angle_deg: float = 0.0,
 ) -> SyntheticCamera:
-    canon = render_board(size_px, mm_per_px, rotation_sectors)
+    canon = render_board(
+        size_px,
+        mm_per_px,
+        rotation_sectors,
+        far_double_bias_mm=far_double_bias_mm,
+        far_angle_deg=far_angle_deg,
+    )
     perspective = perspective_for_pose(pose, size_px)
     image = cv2.warpPerspective(canon, perspective, CAM_SIZE, flags=cv2.INTER_LINEAR, borderValue=_BACKDROP)
     raw = canonical_px_to_mm(size_px, mm_per_px) @ np.linalg.inv(perspective)

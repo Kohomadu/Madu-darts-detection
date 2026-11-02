@@ -29,17 +29,31 @@ First milestone: local Python three-cam detection process + Calibration / Detect
   [10](issues/10-turn-takeout-state-machine.md) Turn/takeout state machine (auto) →
   [11](issues/11-detection-view-event-stream.md) Detection view + Madu stream (auto).
   Decisions: real labelled data first (Autodarts local `throws[]` as reference); classical tip before learned; Autodarts-2.1-shaped local stream ([ADR 0004](../../docs/adr/0004-autodarts-shaped-local-stream.md)); Detection view in the same `:3181` app.
+- Residual overlay ([19](issues/19-calib-residual-overlay.md) resolved): after Auto, measured wire/ring samples are drawn on the Calibration tile (green → red by Board-mm error, magenta arcs on the foreshortened double). `GET /api/calibration` adds `maxResidualMm` and `farDouble` (all samples, not inlier-only). Live empty Board capture `20261102T183706-8fded2`: badge RMS ~1.4 mm while cam0 far-double RMS is 4.6 mm (max 12.5). Accept thresholds unchanged (23).
 
 ## Fog
 
-- Vision Recheck + Manual override ([17](issues/17-vision-recheck.md) / [18](issues/18-manual-hit-override.md), `ready-for-human`): `POST /api/recheck` + `PATCH /api/state/hits/{i}`; Detection Recheck + Hit-chip picker. Live visit #6 needed 4 Rechecks (stub → M7); hardening: stricter elong/conf + keep-prior vs weak BestCam/Miss (unpushed until commit).
-- Calibration / D–T quality ([15](issues/15-calibration-quality-cam0-dt.md), `claimed`, **premium**): root cause = soft cam0 colour seed (15/40 inliers; concentric treble under perspective) with inlier-only RMS hiding it. Edge refine + honest coverage + fusion drop-warn-cam shipped; live D→M wire-straddle fusion fix shipped; residual BestCam misses remain.
-- Takeout finish gate ([16](issues/16-takeout-finish-empty-gate.md) resolved): dual path — strict empty ≤60 **or** soft ≤500 + dart footprints gone vs takeout-start snapshot (≥200) **or** soft held ≥4 s; never force while darts clearly in. Debug on `madu.emptyDiffPx` / `takeoutFullDiffPx`. Live re-check: history `reason` should be `takeoutFinished` without Reset.
-- Off-Board arm/body motion ([14](issues/14-reject-offboard-motion.md) resolved): `max_hit_radius_mm=200` rejects per-cam / fused tips outside the disk before Hit commit (live false Hits were r≈390–740). Image-space Board ROI mask still optional if arms thrash the background.
-- Autofit suggested-20 vs ring mounts ([13](issues/13-autofit-rotate20-mount-bias.md) resolved): Board defaults `{0:10,1:4,2:16}` applied after every suggest; last Accepted offsets persisted to `captures/calibration_offsets.json`. Live 2026-11-02 observation (cam0 opposite / cam1 +4 left / cam2 +4 right) matched the 09 recording bind.
-- Homography-only vs later PnP/triangulation if doubles are noisy.
-- Learned tip detector only if 09’s classical gate is missed (decided classical-first) — gate narrowly missed on singles with n=18; [12](issues/12-learned-tip-detector.md) asks for more labelled data before any model.
-- Ring radii: Autodarts’ labelled throws imply treble-inner ≤ 97.0 mm and double ≈ 167 mm (coords × 170) vs Madu WDF 99.4 / 162–170 — wire-centre vs wire-edge? Revisit `board.geometry` once ≥ 20 labelled D/T darts exist.
-- Takeout timing: no recording has hand frames (07 closes the visit at Autodarts' detection), so `takeoutStarted` latency and the `is_takeout` heuristic (≥ 2500 px × 12 frames) are untested on real hands until 11's live side-by-side. Madu-only event names (`reset`, `bounceOut`, `standby`, `wakeup`) may need renaming once Autodarts' own strings are observed.
-- (cleared) 07 cam-frame gap — Autodarts MJPEG streams work from Windows.
-- Windows USB device identity stability for the three cams (Linux board uses USB location `7.2/7.3/7.4`) — ingest supports `location_index_overrides` until a stable Windows enumerator exists.
+### Overlay / Calibration backlog
+
+- Wire nudge ([20](issues/20-calib-wire-nudge.md), unblocked — 19 resolved).
+- Radii from labels ([21](issues/21-geometry-radii-from-labels.md)): WDF vs Autodarts-implied wire-centre radii.
+- Distortion k1/k2 ([22](issues/22-calib-distortion-k1k2.md), premium, blocked by 21).
+- Accept gate v2 ([23](issues/23-calib-accept-quality-gate-v2.md), blocked by 15).
+- Homography-only vs later PnP/triangulation if doubles stay noisy after 19–22.
+
+### Tip / fusion / learned
+
+- Occlusion-aware fusion ([24](issues/24-fusion-occlusion-drop.md), `ready-for-agent`).
+- Treble-wire prefer ([25](issues/25-fusion-treble-wire-prefer.md), `ready-for-agent`) — S↔T twin of double-wire fix.
+- Labelled corpus ≥100 ([26](issues/26-labelled-corpus-100.md)) → go/no-go for ONNX tip-in-crop ([27](issues/27-onnx-tip-in-crop.md)); umbrella [12](issues/12-learned-tip-detector.md).
+
+### Product / reliability
+
+- Recheck confidence UI ([28](issues/28-recheck-confidence-ui.md)); sealed history edit ([29](issues/29-history-edit-sealed.md)); cam MJPEG tip overlays ([30](issues/30-detection-cam-overlays.md)).
+- Live takeout/standby tune ([31](issues/31-standby-takeout-live-tune.md)); Windows cam identity ([32](issues/32-windows-cam-identity.md)).
+
+### Still open from earlier
+
+- Vision Recheck + Manual override ([17](issues/17-vision-recheck.md) / [18](issues/18-manual-hit-override.md), `ready-for-human`): shipped + Recheck stub hardening (`b57b116`); live human validation continues.
+- Calibration / D–T quality ([15](issues/15-calibration-quality-cam0-dt.md), `claimed`, **premium**): edge refine + honest coverage shipped; residual overlay is [19](issues/19-calib-residual-overlay.md); BestCam / fusion follow-ups → 24–25.
+- Suggested overlay-first order: **21 → 20 → 24+25 → 26 → (27?)** (19 done).

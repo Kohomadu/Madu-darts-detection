@@ -17,7 +17,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from madu_darts.calibration.residuals import ResidualField
 
 import numpy as np
 
@@ -179,6 +182,8 @@ class CamCalibration:
     """Inlier RMS on the double band alone (diagnostic)."""
     rms_treble_mm: float | None = None
     """Inlier RMS on the treble band alone (diagnostic)."""
+    residuals: ResidualField | None = None
+    """Measured wire/ring residuals for the Calibration overlay (ticket 19)."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rotate_offset", int(self.rotate_offset) % SECTORS)

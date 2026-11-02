@@ -19,11 +19,18 @@ from madu_darts.board import (
 from madu_darts.calibration.homography import (
     board_mm_to_image,
     effective_homography,
+    image_to_board_mm,
     polar_mm,
     ring_points_mm,
     wire_angles_deg,
 )
 from madu_darts.calibration.model import SECTOR_STEP_DEG, CamCalibration, FitStatus
+from madu_darts.calibration.residuals import (
+    FAR_ARC_COLOUR,
+    far_annulus_polylines_mm,
+    residual_bgr,
+    summarize_residuals,
+)
 
 RING_RADII_MM = (
     INNER_BULL_RADIUS_MM,
@@ -70,6 +77,80 @@ def _status_text(cal: CamCalibration) -> str:
     return text
 
 
+def _rotate_raw_mm(points_mm: np.ndarray, rotate_offset: int) -> np.ndarray:
+    """Raw board mm → effective (rotate-20) board mm."""
+    from madu_darts.calibration.homography import rotation_mm
+
+    pts = np.asarray(points_mm, dtype=np.float64).reshape(-1, 2)
+    rot = rotation_mm(rotate_offset)
+    hom = np.hstack([pts, np.ones((len(pts), 1))])
+    return (hom @ rot.T)[:, :2]
+
+
+def _draw_residuals(image: np.ndarray, cal: CamCalibration, *, warped_mm_to_px: np.ndarray | None = None) -> None:
+    """Colour-coded residual samples plus a magenta far-double annulus.
+
+    The dot sits on the measured edge. A short quiver runs to the ideal wire
+    when they disagree by a few pixels. Same drawing on the feed and the
+    warped Board.
+    """
+    import cv2
+
+    field = cal.residuals
+    if field is None or cal.homography is None or len(field.error_mm) == 0:
+        return
+
+    summary = summarize_residuals(field, cal.homography, cal.rotate_offset)
+    far = float(summary["farAngleDeg"])
+    h_img, w_img = image.shape[:2]
+    radius = 4 if w_img >= 600 else max(2, int(round(w_img / 160)))
+
+    if warped_mm_to_px is None:
+        ideal = board_mm_to_image(cal.homography, 0, field.points_mm)
+        measured = field.points_px
+        arc_space = lambda pts: board_mm_to_image(cal.homography, cal.rotate_offset, pts)  # noqa: E731
+        label_mm = polar_mm(DOUBLE_OUTER_MM + 14.0, far)
+        label_px = board_mm_to_image(cal.homography, cal.rotate_offset, label_mm)
+    else:
+        from madu_darts.calibration.homography import apply_homography
+
+        target = _rotate_raw_mm(field.points_mm, cal.rotate_offset)
+        measured_mm = image_to_board_mm(cal.homography, 0, field.points_px)
+        measured_eff = _rotate_raw_mm(measured_mm, cal.rotate_offset)
+        ideal = apply_homography(warped_mm_to_px, target)
+        measured = apply_homography(warped_mm_to_px, measured_eff)
+        arc_space = lambda pts: apply_homography(warped_mm_to_px, pts)  # noqa: E731
+        label_px = apply_homography(warped_mm_to_px, np.asarray(polar_mm(DOUBLE_OUTER_MM + 14.0, far), dtype=np.float64))
+
+    outer_mm, inner_mm = far_annulus_polylines_mm(far)
+    for arc_mm in (outer_mm, inner_mm):
+        arc = np.round(arc_space(arc_mm)).astype(np.int32).reshape(-1, 1, 2)
+        cv2.polylines(image, [arc], False, FAR_ARC_COLOUR, 2, lineType=cv2.LINE_AA)
+
+    for i in range(len(field.error_mm)):
+        mx, my = float(measured[i, 0]), float(measured[i, 1])
+        ix, iy = float(ideal[i, 0]), float(ideal[i, 1])
+        if not (0 <= mx < w_img and 0 <= my < h_img):
+            continue
+        colour = residual_bgr(float(field.error_mm[i]))
+        a = (int(round(ix)), int(round(iy)))
+        b = (int(round(mx)), int(round(my)))
+        if abs(a[0] - b[0]) + abs(a[1] - b[1]) >= 3:
+            cv2.line(image, a, b, colour, 1, lineType=cv2.LINE_AA)
+        cv2.circle(image, b, radius, colour, -1, lineType=cv2.LINE_AA)
+        if not bool(field.inlier[i]):
+            cv2.circle(image, b, radius + 2, (240, 240, 240), 1, lineType=cv2.LINE_AA)
+
+    far_stats = summary.get("farDouble") or {}
+    max_mm = far_stats.get("maxMm")
+    text = "FAR" if max_mm is None else f"FAR {max_mm:.1f}"
+    lx, ly = int(round(float(label_px[0]))), int(round(float(label_px[1])))
+    lx = int(np.clip(lx, 4, w_img - 8 * len(text) - 4))
+    ly = int(np.clip(ly, 48 if lx < 220 else 16, h_img - 8))
+    scale = 0.45 if w_img >= 600 else 0.35
+    cv2.putText(image, text, (lx, ly), cv2.FONT_HERSHEY_SIMPLEX, scale, FAR_ARC_COLOUR, 1, cv2.LINE_AA)
+
+
 def _put_badge(image: np.ndarray, text: str, colour: tuple[int, int, int]) -> None:
     import cv2
 
@@ -103,6 +184,7 @@ def draw_spiderweb(image: np.ndarray, cal: CamCalibration, *, highlight_twenty: 
         p1 = board_mm_to_image(h, k, polar_mm(DOUBLE_OUTER_MM, angle))
         cv2.line(out, tuple(np.round(p0).astype(int)), tuple(np.round(p1).astype(int)), WEB_COLOUR, 1, lineType=cv2.LINE_AA)
 
+    _draw_residuals(out, cal)
     _put_badge(out, _status_text(cal), STATUS_COLOURS[cal.status])
     return out
 
@@ -160,6 +242,7 @@ def draw_warped_board(
 
     label = px(polar_mm(DOUBLE_OUTER_MM + margin_mm * 0.5, 0.0))
     cv2.putText(out, "20", (int(label[0]) - 10, int(label[1]) + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, TWENTY_COLOUR, 2, cv2.LINE_AA)
+    _draw_residuals(out, cal, warped_mm_to_px=mm_to_px)
     _put_badge(out, _status_text(cal), STATUS_COLOURS[cal.status])
     return out
 

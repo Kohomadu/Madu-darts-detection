@@ -373,7 +373,17 @@ def apply_quality(cal: CamCalibration, quality: FitQuality) -> CamCalibration:
 
     if cal.homography is None:
         return cal
+    from madu_darts.calibration.residuals import residual_field_from_correspondences
+
     rings = rings_from_homography(cal.homography)
+    residuals = None
+    if quality.points_px is not None and quality.points_mm is not None and len(quality.points_px):
+        residuals = residual_field_from_correspondences(
+            cal.homography,
+            quality.points_px,
+            quality.points_mm,
+            quality.inlier_mask,
+        )
     return replace(
         cal,
         rings=rings,
@@ -382,6 +392,7 @@ def apply_quality(cal: CamCalibration, quality: FitQuality) -> CamCalibration:
         n_points=quality.n_points,
         rms_double_mm=quality.rms_double_mm,
         rms_treble_mm=quality.rms_treble_mm,
+        residuals=residuals,
     )
 
 
