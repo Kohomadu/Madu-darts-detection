@@ -12,6 +12,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -20,7 +21,8 @@ from madu_darts.calibration import AutoFitParams, CalibrationSession
 from madu_darts.cameras import CameraIngest, CamFrame, IngestConfig
 from madu_darts.hits import FusionConfig, Hit, HitDetector, TipConfig
 from madu_darts.motion import BoardModel, MotionConfig, MotionGate, SettledChange
-from madu_darts.turn import TurnConfig, TurnController
+from madu_darts.server.live_store import LiveStore
+from madu_darts.turn import TurnConfig, TurnController, TurnEvent, TurnStatus, TurnTransition
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +43,11 @@ class ServiceConfig:
     jpeg_quality: int = 80
     #: Published ``/api/state`` snapshots kept for late WS subscribers to catch up on.
     state_log: int = 256
+    #: Sealed visits kept in ``GET /api/history`` (survives takeout).
+    max_history: int = 50
+    #: On-disk frame packs under ``captures/live/`` (auto on 3rd Hit + ``POST /api/capture``).
+    max_captures: int = 30
+    capture_root: str | None = None
 
 
 class FramePump(threading.Thread):
@@ -123,13 +130,19 @@ class DetectionService:
             tip_config=self._config.tip,
             fusion_config=self._config.fusion,
         )
+        self.live = LiveStore(
+            root=None if self._config.capture_root is None else Path(self._config.capture_root),
+            max_visits=self._config.max_history,
+            max_captures=self._config.max_captures,
+            jpeg_quality=self._config.jpeg_quality,
+        )
         self.turn = TurnController(
             self.board_model,
             self.motion_gate,
             self.hit_detector,
             config=self._config.turn,
             slots=slots,
-            on_transition=lambda _tr: self.publish_state(),
+            on_transition=self._on_turn_transition,
         )
         self._ingest: CameraIngest | None = None
         self._pump: FramePump | None = None
@@ -248,6 +261,26 @@ class DetectionService:
 
     # --- Turn (ticket 10): start / stop / reset + Autodarts-shaped state ---
 
+    def _on_turn_transition(self, tr: TurnTransition) -> None:
+        """Publish WS state, track visit history, auto-capture on the 3rd Hit."""
+        hits = self.turn.hits
+        self.live.note_transition(tr, hits)
+        if (
+            tr.event == TurnEvent.THROW_DETECTED
+            and tr.status == TurnStatus.TAKEOUT
+            and tr.num_hits >= self._config.turn.max_hits
+            and self.live.open_capture_id() is None
+        ):
+            try:
+                pack = self.capture_now(reason="auto-third")
+                self.live.attach_capture(str(pack["id"]))
+            except Exception as exc:
+                log.warning("auto-capture failed: %s", exc)
+        if tr.event in (TurnEvent.TAKEOUT_FINISHED, TurnEvent.RESET, TurnEvent.STARTED):
+            # Hits are already cleared on the controller; finalize from the open-visit snapshot.
+            self.live.finalize(t_mono=tr.t_mono, reason=tr.event.value)
+        self.publish_state()
+
     def start_detection(self) -> dict[str, Any]:
         """``PUT /api/start``: requires Accepted Calibration; Board taken as empty now."""
         self.session.require_accepted()
@@ -313,8 +346,30 @@ class DetectionService:
             "hits": [h.to_api() for h in snap.hits],
             "calibrationAccepted": bool(calibration["accepted"]),
             "version": snap.version,
+            "historyCount": self.live.history_count,
+            "lastVisitId": self.live.last_visit_id,
+            "captureId": self.live.open_capture_id(),
         }
         return state
+
+    def history_state(self) -> dict[str, Any]:
+        return self.live.history()
+
+    def clear_history(self) -> dict[str, Any]:
+        self.live.clear_history()
+        self.publish_state()
+        return self.live.history()
+
+    def capture_now(self, *, reason: str = "manual") -> dict[str, Any]:
+        """Freeze latest cam frames + ``/api/state`` into ``captures/live/{id}/``."""
+        frames = self.latest_frames()
+        if not frames:
+            raise RuntimeError("no camera frames to capture")
+        pack = self.live.capture(frames, self.api_state(), reason=reason)
+        if self.turn.hits and self.live.open_capture_id() is None:
+            self.live.attach_capture(str(pack["id"]))
+            self.publish_state()
+        return pack
 
     def publish_state(self) -> int:
         """Append the current ``/api/state`` to the log and wake WS subscribers; returns its seq."""

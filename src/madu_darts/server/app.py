@@ -159,6 +159,49 @@ def create_app(service: DetectionService) -> FastAPI:
     def api_config() -> dict[str, Any]:
         return service.api_config()
 
+    # --- visit history (survives takeout) + remote captures ---
+
+    @app.get("/api/history")
+    def history() -> dict[str, Any]:
+        return service.history_state()
+
+    @app.get("/api/history/{visit_id}")
+    def history_one(visit_id: str) -> dict[str, Any]:
+        visit = service.live.visit(visit_id)
+        if visit is None:
+            raise HTTPException(status_code=404, detail=f"unknown visit {visit_id}")
+        return visit
+
+    @app.post("/api/history/clear")
+    def history_clear() -> dict[str, Any]:
+        return service.clear_history()
+
+    @app.post("/api/capture")
+    def capture() -> dict[str, Any]:
+        try:
+            return service.capture_now(reason="manual")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/captures")
+    def captures() -> dict[str, Any]:
+        return {"captures": service.live.list_captures()}
+
+    @app.get("/api/captures/{capture_id}/state.json")
+    def capture_state(capture_id: str) -> dict[str, Any]:
+        data = service.live.read_capture_state(capture_id)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"unknown capture {capture_id}")
+        return data
+
+    @app.get("/api/captures/{capture_id}/{slot}.jpg")
+    def capture_frame(capture_id: str, slot: int) -> Response:
+        check_slot(slot)
+        jpeg = service.live.read_capture_jpeg(capture_id, slot)
+        if jpeg is None:
+            raise HTTPException(status_code=404, detail=f"no frame for capture {capture_id} cam {slot}")
+        return Response(jpeg, media_type="image/jpeg")
+
     # --- cameras ---
 
     @app.get("/api/cams/devices")
@@ -172,6 +215,14 @@ def create_app(service: DetectionService) -> FastAPI:
     @app.get("/api/cams/config")
     def cam_config() -> dict[str, Any]:
         return service.cam_config()
+
+    @app.get("/api/cams/{slot}/frame.jpg")
+    def cam_frame_jpg(slot: int) -> Response:
+        """Raw latest cam frame (no calibration overlay) for remote snaps."""
+        check_slot(slot)
+        frame = service.frame(slot)
+        img = _placeholder() if frame is None else frame
+        return Response(_encode_jpeg(img, service.config.jpeg_quality), media_type="image/jpeg")
 
     @app.patch("/api/cams/config")
     def patch_cam_config(patch: CamConfigPatch) -> dict[str, Any]:

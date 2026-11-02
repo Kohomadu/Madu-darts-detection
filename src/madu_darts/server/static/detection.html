@@ -48,6 +48,12 @@
   #log { font: 12px/1.5 ui-monospace, Consolas, monospace; color:var(--muted); margin:0; max-height:220px; overflow:auto; white-space:pre; }
   #warn { color:var(--warn); font-size:12px; min-height:16px; }
   .meta { color:var(--muted); font-size:12px; margin-top:8px; }
+  .hist-row { display:flex; gap:8px; align-items:center; padding:6px 0; border-bottom:1px solid var(--line); font-size:13px; }
+  .hist-row:last-child { border-bottom:0; }
+  .hist-row .idx { color:var(--muted); width:2.2em; flex:none; }
+  .hist-row .segs { font-weight:700; letter-spacing:.02em; }
+  .hist-row a { color:var(--accent); font-size:12px; }
+  .hist-actions { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
 </style>
 </head>
 <body>
@@ -60,6 +66,7 @@
     <a class="btn" href="/" id="calibrate">Calibrate</a>
     <button id="toggle" class="primary" title="Start/Stop detection. Start takes the current Board as empty.">Start</button>
     <button id="reset" class="danger" title="Clear the Turn and take the current Board as empty (keeps Calibration).">Reset</button>
+    <button id="capture" title="Freeze cam frames + state into /api/captures (also auto-fires on the 3rd Hit).">Capture</button>
   </nav>
 </header>
 <main>
@@ -77,6 +84,15 @@
     <section class="panel">
       <h2>Vision</h2>
       <div class="cams" id="cams"></div>
+    </section>
+    <section class="panel">
+      <h2>History</h2>
+      <div class="hist-actions">
+        <span class="meta" id="hist-meta">0 visits</span>
+        <button id="hist-refresh" type="button">Refresh</button>
+        <button id="hist-clear" type="button" class="danger">Clear</button>
+      </div>
+      <div id="history"></div>
     </section>
     <section class="panel">
       <h2>Events</h2>
@@ -130,6 +146,34 @@
   let state = null;
   const logLines = [];
   let lastKey = '';
+  let lastHistoryCount = -1;
+
+  async function loadHistory() {
+    try {
+      const h = await api('GET', '/api/history');
+      const root = $('#history'); root.innerHTML = '';
+      const visits = (h.visits || []).slice().reverse().slice(0, 12);
+      $('#hist-meta').textContent = `${h.count || 0} visit${(h.count || 0) === 1 ? '' : 's'}` + (h.current ? ' · Turn open' : '');
+      if (h.current && h.current.segmentNames && h.current.segmentNames.length) {
+        const row = document.createElement('div'); row.className = 'hist-row';
+        row.innerHTML = `<span class="idx">now</span><span class="segs">${h.current.segmentNames.join(' · ')}</span>` +
+          (h.current.captureId ? ` <a href="/api/captures/${h.current.captureId}/0.jpg" target="_blank">cam0</a>` : '');
+        root.appendChild(row);
+      }
+      for (const v of visits) {
+        const row = document.createElement('div'); row.className = 'hist-row';
+        const segs = (v.segmentNames || []).join(' · ') || '—';
+        const cap = v.captureId ? ` <a href="/api/captures/${v.captureId}/0.jpg" target="_blank" title="${v.captureId}">cams</a>` : '';
+        row.innerHTML = `<span class="idx">#${v.index}</span><span class="segs">${segs}</span>${cap}`;
+        root.appendChild(row);
+      }
+      if (!visits.length && !(h.current && h.current.segmentNames && h.current.segmentNames.length)) {
+        root.innerHTML = '<div class="meta">No sealed visits yet — throw a Turn, then takeout.</div>';
+      }
+      lastHistoryCount = h.count || 0;
+    } catch (e) { $('#hist-meta').textContent = e.message; }
+  }
+
   function render(st) {
     state = st;
     const running = !!st.running;
@@ -176,6 +220,8 @@
       logLines.length = Math.min(logLines.length, 40);
       $('#log').textContent = logLines.join('\n');
     }
+    const histCount = st.madu && st.madu.historyCount;
+    if (typeof histCount === 'number' && histCount !== lastHistoryCount) loadHistory();
   }
 
   let camSlots = [];
@@ -204,7 +250,16 @@
     try { await api('PUT', state && state.running ? '/api/stop' : '/api/start'); render(await api('GET', '/api/state')); }
     catch (e) { $('#warn').textContent = e.message; }
   };
-  $('#reset').onclick = async () => { try { await api('POST', '/api/reset'); render(await api('GET', '/api/state')); } catch (e) { $('#warn').textContent = e.message; } };
+  $('#reset').onclick = async () => { try { await api('POST', '/api/reset'); render(await api('GET', '/api/state')); await loadHistory(); } catch (e) { $('#warn').textContent = e.message; } };
+  $('#capture').onclick = async () => {
+    try {
+      const pack = await api('POST', '/api/capture');
+      $('#warn').textContent = `Captured ${pack.id} (${Object.keys(pack.frames || {}).length} cams)`;
+      await loadHistory();
+    } catch (e) { $('#warn').textContent = e.message; }
+  };
+  $('#hist-refresh').onclick = () => loadHistory();
+  $('#hist-clear').onclick = async () => { try { await api('POST', '/api/history/clear'); await loadHistory(); render(await api('GET', '/api/state')); } catch (e) { $('#warn').textContent = e.message; } };
 
   // --- stream: WS first, polling fallback ---
   let ws = null, pollTimer = null;
@@ -226,6 +281,7 @@
     buildBoard();
     try { buildCams(await api('GET', '/api/cams/config')); } catch (e) { /* cams panel stays empty */ }
     await pollOnce();
+    await loadHistory();
     connect();
   })();
 })();

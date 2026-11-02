@@ -11,3 +11,6 @@ venv/
 
 # Visit-recording cam frames are large (~200MB/session); meta.json stays tracked.
 .scratch/detection-tool/captures/recordings/**/*.jpg
+
+# Live auto/manual captures from DetectionService (JPEG + state.json).
+captures/live/
