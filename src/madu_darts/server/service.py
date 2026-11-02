@@ -360,6 +360,7 @@ class DetectionService:
             "historyCount": self.live.history_count,
             "lastVisitId": self.live.last_visit_id,
             "captureId": self.live.open_capture_id(),
+            **self.turn.empty_debug(self.latest_frames()),
         }
         return state
 

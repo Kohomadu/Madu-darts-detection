@@ -98,10 +98,13 @@ class TurnController:
         self._committed: list[_Committed] = []
         self._offered: dict[int, Box] = {}
         self._empty_refs: dict[int, np.ndarray] = {}
+        #: BoardModel snapshot at ``takeoutStarted`` (darts still in) for the removed-footprint test.
+        self._takeout_full_refs: dict[int, np.ndarray] = {}
         self._quiet_frames = 0
         self._last_motion_t: float | None = None
         self._takeout_started_t: float | None = None
         self._last_retraction: _Retraction | None = None
+        self._last_empty_debug: dict[str, object] = {}
         self._bounce_outs: list[BounceOut] = []
         self._ignored = 0
         self._standby = False
@@ -256,19 +259,37 @@ class TurnController:
                 and not self.detector.pending
                 and (self._committed or self._status == TurnStatus.TAKEOUT_IN_PROGRESS)
             ):
-                if self._board_empty(frames):
-                    if self._status != TurnStatus.TAKEOUT_IN_PROGRESS:
-                        # Hand too quick to classify (or jump-cut replay): the darts are gone anyway.
-                        self._begin_takeout(t_mono)
-                    self._finish_takeout(frames, t_mono)
-                elif (
+                cleared = self._board_cleared(frames)
+                soft = self._board_empty(
+                    frames, max_px=cfg.empty_soft_max_changed_pixels
+                )
+                zero_recover = (
                     self._status == TurnStatus.TAKEOUT_IN_PROGRESS
                     and not self._committed
                     and self._takeout_started_t is not None
                     and t_mono - self._takeout_started_t >= cfg.false_takeout_recover_s
-                ):
-                    # Zero-dart false takeout: nothing to remove, Board quiet → adopt as empty.
-                    log.info("zero-dart takeout recovered: adopting current frames as empty Board")
+                )
+                # Hits still listed but Board nearly empty vs Accept refs for long enough → finish
+                # (ticket 16); never force-adopt while darts clearly remain.
+                soft_force = (
+                    self._status == TurnStatus.TAKEOUT_IN_PROGRESS
+                    and bool(self._committed)
+                    and soft
+                    and self._takeout_started_t is not None
+                    and t_mono - self._takeout_started_t >= cfg.takeout_force_finish_s
+                )
+                if cleared or zero_recover or soft_force:
+                    if self._status != TurnStatus.TAKEOUT_IN_PROGRESS:
+                        # Hand too quick to classify (or jump-cut replay): the darts are gone anyway.
+                        self._begin_takeout(t_mono)
+                    if soft_force and not cleared:
+                        log.info(
+                            "takeout soft-force after %.1fs (emptyDiff=%s)",
+                            t_mono - float(self._takeout_started_t or t_mono),
+                            self._last_empty_debug.get("emptyDiffPx"),
+                        )
+                    elif zero_recover and not cleared:
+                        log.info("zero-dart takeout recovered: adopting current frames as empty Board")
                     self._finish_takeout(frames, t_mono)
 
             return list(self._unread[mark:])
@@ -384,27 +405,85 @@ class TurnController:
 
     def _begin_takeout(self, t: float) -> None:
         self._takeout_started_t = t
+        self._takeout_full_refs = {
+            s: ref for s in self._slots if (ref := self.board.reference(s)) is not None
+        }
         self.detector.reset()
         self._offered.clear()
         self._set(TurnStatus.TAKEOUT_IN_PROGRESS, TurnEvent.TAKEOUT_STARTED, t)
 
     def _finish_takeout(self, frames: dict[int, np.ndarray], t: float) -> None:
         self._clear_turn()
+        self._takeout_full_refs = {}
         self._adopt_empty(frames)
         self.gate.reset()
         self.detector.reset()
         self._set(TurnStatus.THROW, TurnEvent.TAKEOUT_FINISHED, t)
 
-    def _board_empty(self, frames: dict[int, np.ndarray]) -> bool:
+    def _board_empty(self, frames: dict[int, np.ndarray], *, max_px: int | None = None) -> bool:
+        limit = self.config.empty_max_changed_pixels if max_px is None else max_px
         judged = 0
         for slot in self._slots:
             frame, ref = frames.get(slot), self._empty_refs.get(slot)
             if frame is None or ref is None:
                 continue
             judged += 1
-            if self._changed_pixels(frame, ref) > self.config.empty_max_changed_pixels:
+            if self._changed_pixels(frame, ref) > limit:
                 return False
         return judged > 0
+
+    def _darts_removed(self, frames: dict[int, np.ndarray]) -> bool:
+        """True when every judged cam differs enough from the takeout-start (dart) background."""
+        if not self._takeout_full_refs:
+            return False
+        judged = 0
+        for slot in self._slots:
+            frame, full = frames.get(slot), self._takeout_full_refs.get(slot)
+            if frame is None or full is None:
+                continue
+            judged += 1
+            if self._changed_pixels(frame, full) < self.config.dart_removed_min_pixels:
+                return False
+        return judged > 0
+
+    def _board_cleared(self, frames: dict[int, np.ndarray]) -> bool:
+        """Strict empty, or (during takeout) soft empty + dart footprints gone (ticket 16)."""
+        debug = self.empty_debug(frames)
+        self._last_empty_debug = debug
+        if self._board_empty(frames):
+            return True
+        if self._status != TurnStatus.TAKEOUT_IN_PROGRESS:
+            return False
+        soft = self._board_empty(frames, max_px=self.config.empty_soft_max_changed_pixels)
+        removed = self._darts_removed(frames)
+        return soft and removed
+
+    def empty_debug(self, frames: dict[int, np.ndarray] | None = None) -> dict[str, object]:
+        """Per-cam empty / dart-bg diffs for ``/api/state`` (live takeout diagnosis)."""
+        frames = frames or {}
+        empty: dict[str, int] = {}
+        dart_bg: dict[str, int] = {}
+        takeout_full: dict[str, int] = {}
+        for slot in self._slots:
+            frame = frames.get(slot)
+            if frame is None:
+                continue
+            key = str(slot)
+            eref = self._empty_refs.get(slot)
+            if eref is not None:
+                empty[key] = self._changed_pixels(frame, eref)
+            bref = self.board.reference(slot)
+            if bref is not None:
+                dart_bg[key] = self._changed_pixels(frame, bref)
+            fref = self._takeout_full_refs.get(slot)
+            if fref is not None:
+                takeout_full[key] = self._changed_pixels(frame, fref)
+        return {
+            "emptyDiffPx": empty,
+            "dartBgDiffPx": dart_bg,
+            "takeoutFullDiffPx": takeout_full,
+            "takeoutStartedTMono": self._takeout_started_t,
+        }
 
     # --- standby ---
 
@@ -444,6 +523,7 @@ class TurnController:
         self._ignored = 0
         self._last_retraction = None
         self._takeout_started_t = None
+        self._takeout_full_refs = {}
         self._quiet_frames = 0
 
     def _adopt_empty(self, frames: dict[int, np.ndarray]) -> None:

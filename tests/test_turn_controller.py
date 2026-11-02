@@ -207,6 +207,69 @@ def test_zero_dart_false_takeout_recovers_by_adopting_frames() -> None:
     assert ("throw", "throwDetected", 1) in _seq(out)
 
 
+def test_takeout_finishes_via_soft_empty_and_darts_removed() -> None:
+    """Strict emptyMax fails when Accept refs are stale; soft + dart-gone still clears (ticket 16)."""
+    sim = Sim(
+        TurnConfig(
+            empty_max_changed_pixels=60,
+            empty_soft_max_changed_pixels=5000,
+            dart_removed_min_pixels=50,
+            takeout_force_finish_s=60.0,
+        )
+    )
+    for darts in ([T20], [T20, S11], [T20, S11, D16]):
+        sim.throw(darts)
+    sim.feed_seq(sim.hand_frames([T20, S11, D16]))
+    assert sim.ctrl.status == TurnStatus.TAKEOUT_IN_PROGRESS
+
+    # Stale Accept refs (still look like a full Board) → strict empty never matches.
+    stale = sim.frames([T20, S11, D16])
+    sim.ctrl._empty_refs = {s: stale[s].copy() for s in SLOTS}
+    empty = sim.frames([])
+    dbg = sim.ctrl.empty_debug(empty)
+    assert max(dbg["emptyDiffPx"].values()) > 60
+    assert min(dbg["takeoutFullDiffPx"].values()) >= 50
+
+    out = sim.feed(empty, n=8)
+    assert _seq(out)[-1] == ("throw", "takeoutFinished", 0)
+    assert sim.ctrl.hits == ()
+
+
+def test_takeout_soft_force_when_nearly_empty_but_strict_fails() -> None:
+    """Soft empty held for takeout_force_finish_s finishes even if dart-removed is inconclusive."""
+    sim = Sim(
+        TurnConfig(
+            empty_max_changed_pixels=5,  # impossibly tight vs any residual
+            empty_soft_max_changed_pixels=5000,
+            dart_removed_min_pixels=10_000,  # never “removed” by pixel count
+            takeout_force_finish_s=0.5,
+            quiet_frames=2,
+        )
+    )
+    for darts in ([T20], [T20, S11], [T20, S11, D16]):
+        sim.throw(darts)
+    sim.feed_seq(sim.hand_frames([T20, S11, D16]))
+    assert sim.ctrl.status == TurnStatus.TAKEOUT_IN_PROGRESS
+
+    empty = sim.frames([])
+    # Quiet but not long enough yet.
+    sim.feed(empty, n=3, dt=0.1)
+    assert sim.ctrl.status == TurnStatus.TAKEOUT_IN_PROGRESS
+    out = sim.feed(empty, n=8, dt=0.1)  # ≥0.5 s since takeoutStarted
+    assert _seq(out)[-1] == ("throw", "takeoutFinished", 0)
+
+
+def test_takeout_does_not_force_while_darts_still_in() -> None:
+    sim = Sim(TurnConfig(takeout_force_finish_s=0.3, empty_soft_max_changed_pixels=200))
+    for darts in ([T20], [T20, S11], [T20, S11, D16]):
+        sim.throw(darts)
+    sim.feed_seq(sim.hand_frames([T20, S11, D16]))
+    # Hand left but darts remain — soft empty must fail; no finish after timeout.
+    out = sim.feed(sim.frames([T20, S11, D16]), n=20, dt=0.1)
+    assert sim.ctrl.status == TurnStatus.TAKEOUT_IN_PROGRESS
+    assert all(tr.event != TurnEvent.TAKEOUT_FINISHED for tr in out)
+
+
 # --- operator controls ---
 
 

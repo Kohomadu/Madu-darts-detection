@@ -13,13 +13,19 @@ class TurnConfig:
     Pixel budgets are at motion scale (320×180 for 1280×720 ÷ 4). On the 07
     recording one stuck dart changes 120–720 px per cam, three darts 580–1550,
     and the empty Board drifts 0 px between visits — ``empty_max_changed_pixels``
-    sits well below the smallest dart.
+    sits well below the smallest dart. Live Boards after a visit often need the
+    softer takeout-finish path (ticket 16).
     """
 
     #: Hits per Turn (Autodarts: three darts, then ``status: takeout``).
     max_hits: int = 3
-    #: Per-cam diff vs the empty-Board reference at or below this on every cam → Board empty.
+    #: Per-cam diff vs the empty-Board reference at or below this on every cam → Board empty
+    #: (strict path; lighting-matched Accept reference).
     empty_max_changed_pixels: int = 60
+    #: Softer empty cap used with ``dart_removed`` during ``takeoutInProgress`` (ticket 16).
+    empty_soft_max_changed_pixels: int = 500
+    #: Per-cam diff vs the takeout-start (dart-committed) background above this → footprints gone.
+    dart_removed_min_pixels: int = 200
     #: Consecutive frames with no cam moving before the empty / recovery checks run.
     quiet_frames: int = 3
     #: Footprint ROI diff vs the pre-commit reference ≤ ratio × diff vs the current
@@ -32,6 +38,8 @@ class TurnConfig:
     #: Zero-dart takeout (hand seen, nothing to remove) quiet for this long but not
     #: empty vs the old reference → adopt the current frames as the empty Board.
     false_takeout_recover_s: float = 3.0
+    #: Takeout-in-progress with Hits still stuck, quiet this long → force finish (adopt frames).
+    takeout_force_finish_s: float = 4.0
     #: No motion for this long → standby (gate parked, frames sampled at ``standby_poll_s``).
     #: Autodarts ``cam.standbyMinutes`` default 60. ``0`` disables.
     standby_minutes: float = 60.0
@@ -41,10 +49,13 @@ class TurnConfig:
         return {
             "maxHits": self.max_hits,
             "emptyMaxChangedPixels": self.empty_max_changed_pixels,
+            "emptySoftMaxChangedPixels": self.empty_soft_max_changed_pixels,
+            "dartRemovedMinPixels": self.dart_removed_min_pixels,
             "quietFrames": self.quiet_frames,
             "revertRatio": self.revert_ratio,
             "retractionWindowS": self.retraction_window_s,
             "falseTakeoutRecoverS": self.false_takeout_recover_s,
+            "takeoutForceFinishS": self.takeout_force_finish_s,
             "standbyMinutes": self.standby_minutes,
             "standbyPollS": self.standby_poll_s,
         }
