@@ -40,15 +40,18 @@ def _field_with_far_errors(cam, *, far_err: float, near_err: float = 0.4):
 def test_far_double_status_thresholds() -> None:
     assert far_double_status(None) is None
     assert far_double_status({"rmsMm": 1.0, "maxMm": 2.0}) is FitStatus.PASS
-    assert far_double_status({"rmsMm": 3.5, "maxMm": 4.0}) is FitStatus.WARN
-    assert far_double_status({"rmsMm": 5.4, "maxMm": 6.0}) is FitStatus.FAIL
-    assert far_double_status({"rmsMm": 2.0, "maxMm": 8.5}) is FitStatus.FAIL
+    assert far_double_status({"rmsMm": 4.0, "maxMm": 6.0}) is FitStatus.WARN
+    assert far_double_status({"rmsMm": 5.6, "maxMm": 6.0}) is FitStatus.FAIL
+    assert far_double_status({"rmsMm": 2.0, "maxMm": 12.5}) is FitStatus.FAIL
+    # Live-class far max ~8–9 warns but does not fail Accept.
+    assert far_double_status({"rmsMm": 3.3, "maxMm": 8.2}) is FitStatus.WARN
+    assert far_double_status({"rmsMm": 4.7, "maxMm": 9.0}) is FitStatus.WARN
 
 
 def test_soft_far_double_demotes_pass_badge_and_blocks_accept() -> None:
     """Live cam0-style: inlier RMS looks PASS, foreshortened double is soft."""
     cam = synthetic_camera("fronto")
-    field = _field_with_far_errors(cam, far_err=5.5)
+    field = _field_with_far_errors(cam, far_err=6.5)
     cal = CamCalibration(
         slot=0,
         homography=cam.truth_homography,
@@ -65,7 +68,7 @@ def test_soft_far_double_demotes_pass_badge_and_blocks_accept() -> None:
 
 def test_cam1_class_far_double_warns_but_still_acceptable() -> None:
     cam = synthetic_camera("fronto")
-    field = _field_with_far_errors(cam, far_err=3.5)
+    field = _field_with_far_errors(cam, far_err=4.0)
     cal = CamCalibration(
         slot=1,
         homography=cam.truth_homography,
@@ -86,7 +89,7 @@ def test_session_blocks_soft_far_double_even_with_green_rms() -> None:
         rms_mm=1.0,
         n_inliers=200,
         n_points=300,
-        residuals=_field_with_far_errors(cam, far_err=5.5),
+        residuals=_field_with_far_errors(cam, far_err=6.5),
     )
     good = CamCalibration(slot=1, homography=np.eye(3), rms_mm=0.5)
     session = CalibrationSession(
@@ -125,7 +128,7 @@ def test_soft_far_double_synthetic_autofit_raises_far_stats() -> None:
 
 def test_accept_gate_params_are_tunable() -> None:
     cam = synthetic_camera("fronto")
-    field = _field_with_far_errors(cam, far_err=3.5)
+    field = _field_with_far_errors(cam, far_err=4.0)
     cal = CamCalibration(
         slot=0,
         homography=cam.truth_homography,
@@ -138,8 +141,8 @@ def test_accept_gate_params_are_tunable() -> None:
     tight = AcceptGateParams(far_double_rms_mm=2.0, far_double_max_mm=3.0)
     assert accept_block_reasons(cal, params=loose) == []
     assert accept_block_reasons(cal, params=tight)
-    assert ACCEPT_FAR_DOUBLE_RMS_MM == 4.0
-    assert ACCEPT_FAR_DOUBLE_MAX_MM == 7.0
+    assert ACCEPT_FAR_DOUBLE_RMS_MM == 5.5
+    assert ACCEPT_FAR_DOUBLE_MAX_MM == 12.0
 
 
 def test_suggest_exports_live_like_blocker_copy() -> None:

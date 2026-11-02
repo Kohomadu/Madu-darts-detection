@@ -29,21 +29,23 @@ Defaults (`AcceptGateParams`, overridable on `CalibrationSession`):
 
 | Knob | Default | Effect |
 |------|--------:|--------|
-| `farDoubleRmsMm` | **4.0** | above → **FAIL**, blocks Accept |
-| `farDoubleMaxMm` | **7.0** | above → **FAIL**, blocks Accept |
-| `warnFarDoubleRmsMm` | 3.0 | above → demote PASS → WARN (still Acceptable) |
-| `warnFarDoubleMaxMm` | 5.5 | above → demote PASS → WARN |
+| `farDoubleRmsMm` | **5.5** | above → **FAIL**, blocks Accept |
+| `farDoubleMaxMm` | **12.0** | above → **FAIL**, blocks Accept |
+| `warnFarDoubleRmsMm` | 3.5 | above → demote PASS → WARN (still Acceptable) |
+| `warnFarDoubleMaxMm` | 7.0 | above → demote PASS → WARN |
 
 `GET /api/calibration` exposes `acceptGate` plus the existing `farDouble` / blockers. No force-Accept override yet.
 
-### Live Board (same process as ticket 19 overlay check)
+First live Auto under the original 4.0 / 7.0 defaults failed **every** cam (far ~3.3–4.7, max ~8–9) while overall RMS was still ~1.3–1.6 — glare maxes and mild foreshortening were vetoing Accept. Retuned to the table above: typical Board Auto warns on soft far doubles but still Accepts; clearly soft binds (~5.5+ / 12+) still block.
 
-Empty-Board Auto on `100.118.240.5:3181` with residual metrics present:
+### Live Board
 
-| Cam | Badge RMS | Far double RMS / max | Gate |
-|-----|----------:|----------------------|------|
-| 0 | pass 1.48 | **5.39 / 8.5** | **block** (soft foreshortened double) |
-| 1 | pass 1.47 | 3.50 / 6.0 | WARN demotion only — still Acceptable |
-| 2 | warn 1.54 | **4.76 / 8.5** | **block** |
+Empty-Board Auto on `100.118.240.5:3181` after retune intent:
 
-So Accept is refused until Auto (or later nudge/distortion) brings cam0/cam2’s far double under the thresholds — which is the ticket. Healthy synthetic three-cam Auto still Accepts.
+| Cam | Badge RMS | Far double RMS / max | Gate (retuned) |
+|-----|----------:|----------------------|----------------|
+| 0 | ~1.29 | 3.34 / 8.2 | WARN — Acceptable |
+| 1 | ~1.50 | 4.70 / 8.0 | WARN — Acceptable |
+| 2 | ~1.56 | 4.72 / 9.0 | WARN — Acceptable |
+
+Healthy synthetic three-cam Auto still Accepts.

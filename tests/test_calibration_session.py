@@ -224,10 +224,10 @@ def test_snapshot_is_json_shaped() -> None:
     assert snap["canAccept"] is False
     assert snap["blockers"] == ["cam 1: blank"]
     assert snap["acceptGate"] == {
-        "farDoubleRmsMm": 4.0,
-        "farDoubleMaxMm": 7.0,
-        "warnFarDoubleRmsMm": 3.0,
-        "warnFarDoubleMaxMm": 5.5,
+        "farDoubleRmsMm": 5.5,
+        "farDoubleMaxMm": 12.0,
+        "warnFarDoubleRmsMm": 3.5,
+        "warnFarDoubleMaxMm": 7.0,
     }
     assert snap["cams"]["0"] == {
         "status": "pass",
