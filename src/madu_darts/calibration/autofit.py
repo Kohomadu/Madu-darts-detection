@@ -33,8 +33,19 @@ from madu_darts.calibration.homography import (
     rings_from_homography,
     wire_angles_deg,
 )
-from madu_darts.calibration.model import PASS_RMS_MM, SECTORS, CamCalibration, Ellipse
-from madu_darts.calibration.refine import RefineParams, apply_quality, refine_homography
+from madu_darts.calibration.model import (
+    PASS_RMS_MM,
+    SECTORS,
+    WARN_MIN_COVERAGE,
+    WARN_MIN_INLIERS,
+    WARN_RMS_MM,
+    CamCalibration,
+    Ellipse,
+    FitStatus,
+    far_double_status,
+)
+from madu_darts.calibration.refine import FitQuality, RefineParams, apply_quality, refine_homography
+from madu_darts.calibration.residuals import residual_field_from_correspondences, summarize_residuals
 
 _DOUBLE_MID_MM = (DOUBLE_INNER_MM + DOUBLE_OUTER_MM) / 2.0  # 166.0
 _TREBLE_MID_MM = (TREBLE_INNER_MM + TREBLE_OUTER_MM) / 2.0  # 103.4
@@ -892,6 +903,34 @@ _WIRE_OFFSET_DEG = 9.0
 _SECTOR_STEP_DEG = 18.0
 
 
+def _edge_seed_needs_polish(seed_edge: FitQuality | None, homography: np.ndarray) -> bool:
+    """True when measured ring/wire edges say the colour H is soft (esp. far double).
+
+    Colour Auto can look "healthy" on mid-bed wire points while the concentric
+    rings sit inside the real wires on the foreshortened half. Edge re-score
+    catches that so we still run ``refine_homography``.
+    """
+    if seed_edge is None or seed_edge.n_points <= 0:
+        return False
+    if seed_edge.n_inliers < WARN_MIN_INLIERS or seed_edge.coverage < WARN_MIN_COVERAGE:
+        return True
+    if math.isfinite(seed_edge.rms_mm) and seed_edge.rms_mm > WARN_RMS_MM:
+        return True
+    if seed_edge.points_px is None or seed_edge.points_mm is None:
+        return False
+    field = residual_field_from_correspondences(
+        homography,
+        seed_edge.points_px,
+        seed_edge.points_mm,
+        seed_edge.inlier_mask,
+    )
+    if field is None:
+        return False
+    far = summarize_residuals(field, homography, 0).get("farDouble")
+    status = far_double_status(far)
+    return status in (FitStatus.WARN, FitStatus.FAIL)
+
+
 def _wire_mm_for_label_offset(offset: int) -> tuple[np.ndarray, np.ndarray]:
     """Board-mm wire targets with sector labels rotated by ``offset`` (0 = suggested 20)."""
     angles = [
@@ -980,9 +1019,10 @@ def suggest(image: np.ndarray, slot: int = 0, params: AutoFitParams | None = Non
     if not p.refine:
         return cal
 
-    # Ticket 15: only edge-refine when the colour seed is soft (few inliers /
-    # high RMS). A healthy colour bind (cam1/2, synthetic, 07 recording) is kept
-    # and only re-scored against measured edges so the badge stays honest.
+    # Ticket 15 + spider polish: edge-refine when the colour seed is weak *or*
+    # when edge re-score shows a soft far double / thin coverage. Healthy
+    # colour binds (cam1/2, clean synthetic) with tight far-double stay on the
+    # colour H and are only re-scored for the badge.
     from madu_darts.calibration.refine import evaluate_fit, measure_board_edges
 
     from madu_darts.calibration.mount import DEFAULT_MOUNT_ANGLES_DEG
@@ -1002,7 +1042,7 @@ def suggest(image: np.ndarray, slot: int = 0, params: AutoFitParams | None = Non
 
     colour_inliers = cal.n_inliers or 0
     colour_weak = colour_inliers < 28 or (cal.rms_mm is not None and cal.rms_mm > PASS_RMS_MM)
-    if not colour_weak:
+    if not colour_weak and not _edge_seed_needs_polish(seed_edge, homography):
         return apply_quality(cal, seed_edge) if seed_edge and seed_edge.n_inliers else cal
 
     refined_h, quality = refine_homography(image, homography, refine_params)
