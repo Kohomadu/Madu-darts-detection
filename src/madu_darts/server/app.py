@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -82,6 +82,10 @@ def create_app(service: DetectionService) -> FastAPI:
     def index() -> str:
         return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
 
+    @app.get("/detection", response_class=HTMLResponse)
+    def detection_view() -> str:
+        return (STATIC_DIR / "detection.html").read_text(encoding="utf-8")
+
     # --- state ---
 
     @app.get("/api/version")
@@ -92,12 +96,28 @@ def create_app(service: DetectionService) -> FastAPI:
 
     @app.get("/api/state")
     def state() -> dict[str, Any]:
-        snap = session.snapshot()
-        return {
-            "status": "ready" if snap["accepted"] else "calibrationRequired",
-            "calibration": snap,
-            "cameras": {"open": service.cam_config()["camerasOpen"], "error": service.camera_error},
-        }
+        """Autodarts 2.1 shape (ADR 0004) + ``calibration`` / ``cameras`` / ``madu`` blocks."""
+        return service.api_state()
+
+    @app.websocket("/api/events")
+    async def events(ws: WebSocket, motion: int = Query(default=0)) -> None:
+        """Push ``{type:"state", data}`` on every change (full visit-so-far); ``?motion=1`` adds
+        a ``{type:"motion", data}`` debug channel at ~5 Hz."""
+        await ws.accept()
+        seq = service.state_seq
+        motion_interval = 0.2
+        last_motion = 0.0
+        try:
+            await ws.send_json({"type": "state", "data": service.api_state()})
+            while True:
+                for s, st in await asyncio.to_thread(service.wait_for_states, seq, 0.25):
+                    seq = s
+                    await ws.send_json({"type": "state", "data": st})
+                if motion and time.monotonic() - last_motion >= motion_interval:
+                    last_motion = time.monotonic()
+                    await ws.send_json({"type": "motion", "data": service.motion_state()})
+        except (WebSocketDisconnect, RuntimeError):
+            return
 
     @app.get("/api/state/motion")
     def motion_state() -> dict[str, Any]:
@@ -182,12 +202,14 @@ def create_app(service: DetectionService) -> FastAPI:
     def auto_all() -> dict[str, Any]:
         snap = service.recalibrate()
         service.sync_motion_with_calibration()
+        service.publish_state()
         return snap
 
     @app.post("/api/calibration/auto/{slot}")
     def auto_one(slot: int) -> dict[str, Any]:
         snap = service.recalibrate(check_slot(slot))
         service.sync_motion_with_calibration()
+        service.publish_state()
         return snap
 
     @app.post("/api/calibration/{slot}/rotate-left")
@@ -204,6 +226,7 @@ def create_app(service: DetectionService) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         service.sync_motion_with_calibration()
+        service.publish_state()
         return session.snapshot()
 
     @app.post("/api/calibration/accept")
@@ -213,12 +236,14 @@ def create_app(service: DetectionService) -> FastAPI:
         except AcceptBlocked as exc:
             return JSONResponse(status_code=409, content={"detail": "accept blocked", "blockers": exc.blockers})
         service.on_calibration_accepted()
+        service.publish_state()
         return JSONResponse(session.snapshot())
 
     @app.post("/api/calibration/reset")
     def reset() -> dict[str, Any]:
         session.reset()
         service.on_calibration_reset()
+        service.publish_state()
         return session.snapshot()
 
     # --- images ---

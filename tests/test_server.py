@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -100,7 +102,7 @@ def test_startup_opens_cameras_and_suggests_all() -> None:
         assert {c["status"] for c in snap["cams"].values()} == {"pass"}
         assert len(factory.created) == 1 and factory.created[0].opened
         state = client.get("/api/state").json()
-        assert state["status"] == "calibrationRequired"
+        assert state["running"] is False and state["madu"]["calibrationAccepted"] is False
         assert state["cameras"]["open"] is True
     assert factory.created[0].closed == 1  # shutdown closes ingest
 
@@ -206,6 +208,100 @@ def test_turn_controls_and_state_endpoints() -> None:
         assert turn["running"] is False and client.get("/api/state/motion").json()["enabled"] is False
 
 
+# --- ticket 11: Autodarts-shaped /api/state + ws /api/events + Detection view ---
+
+CAPTURE_06 = Path(__file__).resolve().parents[1] / ".scratch" / "detection-tool" / "captures" / "06-live-throw-2026-11-02"
+
+
+def _accept(client: TestClient) -> None:
+    for slot, cam in CAMS.items():
+        for _ in range(cam.correct_offset):
+            client.post(f"/api/calibration/{slot}/rotate-left")
+    assert client.post("/api/calibration/accept").status_code == 200
+
+
+def _ws_until(ws, predicate, limit: int = 400) -> dict[str, Any]:
+    """Read ``{type:"state"}`` messages (skipping ``motion``) until ``predicate(data)`` holds."""
+    for _ in range(limit):
+        msg = ws.receive_json()
+        if msg["type"] == "state" and predicate(msg["data"]):
+            return msg["data"]
+    raise AssertionError("expected state not received over /api/events")
+
+
+@pytest.mark.skipif(not (CAPTURE_06 / "state_with_throws.json").is_file(), reason="06 capture not present")
+def test_api_state_is_field_compatible_with_autodarts_06_capture() -> None:
+    capture = json.loads((CAPTURE_06 / "state_with_throws.json").read_text(encoding="utf-8"))
+    ws_capture = json.loads((CAPTURE_06 / "ws_state_3darts.json").read_text(encoding="utf-8"))
+    client, _, _ = make_client()
+    with client:
+        state = client.get("/api/state").json()
+        assert set(capture) <= set(state), "Autodarts top-level fields must all be present"
+        assert state["connected"] is True and state["running"] is False and state["throws"] == []
+        assert set(state) - set(capture) == {"calibration", "cameras", "madu"}
+
+        _accept(client)
+        state = client.get("/api/state").json()
+        assert (state["running"], state["status"], state["event"]) == (True, "throw", "started")
+
+        with client.websocket_connect("/api/events") as ws:
+            msg = ws.receive_json()
+            assert set(msg) == set(ws_capture) == {"type", "data"} and msg["type"] == "state"
+            assert set(capture) <= set(msg["data"])
+
+
+def test_ws_events_push_each_turn_change_end_to_end() -> None:
+    from tests.test_hits_tip_fusion import draw_dart
+
+    capture_throw_keys = {"bed", "bouncer", "coordsX", "coordsY", "failed", "method", "multiplier", "segmentName", "segmentNumber"}
+    client, service, factory = make_client()
+    with client:
+        _accept(client)
+        with client.websocket_connect("/api/events?motion=1") as ws:
+            first = ws.receive_json()
+            assert first["type"] == "state" and first["data"]["event"] == "started"
+
+            # A dart appears on every cam: the pump → gate → detector → Turn → stream.
+            for slot, cam in CAMS.items():
+                factory.frames[slot] = draw_dart(cam.image, cam.pixel_of_mm(0.0, 103.4), angle_deg=5.0)
+            data = _ws_until(ws, lambda d: d["event"] == "throwDetected")
+            assert data["status"] == "throw" and len(data["throws"]) == 1
+            throw = data["throws"][0]
+            assert set(throw) == capture_throw_keys
+            assert throw["segmentName"] == "T20" and throw["multiplier"] == 3 and throw["bed"] == "Triple"
+            assert data["madu"]["hits"][0]["madu"]["segment"] == "T20"
+            assert client.get("/api/state").json()["throws"] == data["throws"]
+
+            # Motion debug channel rides along when asked for.
+            for _ in range(50):
+                msg = ws.receive_json()
+                if msg["type"] == "motion":
+                    assert set(msg["data"]["cams"]) == {"0", "1", "2"}
+                    break
+            else:
+                raise AssertionError("no motion message on ?motion=1")
+
+            # The dart leaves without a hand → retracted (bounce-out), strip empties.
+            for slot, cam in CAMS.items():
+                factory.frames[slot] = cam.image
+            data = _ws_until(ws, lambda d: d["event"] in ("bounceOut", "takeoutFinished") and not d["throws"])
+            assert data["status"] == "throw"
+
+            # Operator controls are mirrored on the stream too.
+            client.put("/api/stop")
+            data = _ws_until(ws, lambda d: d["event"] == "stopped")
+            assert data["running"] is False
+
+
+def test_detection_view_is_served() -> None:
+    client, _, _ = make_client()
+    with client:
+        res = client.get("/detection")
+        assert res.status_code == 200
+        assert "Detection" in res.text and "/api/events" in res.text and "/api/state" in res.text
+        assert "/detection" in client.get("/").text
+
+
 def test_accept_flow_and_revocation() -> None:
     client, service, _ = make_client()
     with client:
@@ -215,7 +311,8 @@ def test_accept_flow_and_revocation() -> None:
 
         res = client.post("/api/calibration/accept")
         assert res.status_code == 200 and res.json()["accepted"] is True
-        assert client.get("/api/state").json()["status"] == "ready"
+        state = client.get("/api/state").json()
+        assert state["running"] is True and state["madu"]["calibrationAccepted"] is True
 
         # Gate is open: the Hit pipeline seam maps a T20 pixel to T20 on every cam.
         from madu_darts.board import point_mm_to_segment
@@ -226,6 +323,7 @@ def test_accept_flow_and_revocation() -> None:
 
         client.post("/api/calibration/2/rotate-left")
         assert client.get("/api/calibration").json()["accepted"] is False
+        assert client.get("/api/state").json()["running"] is False  # revoked Accept parks detection
 
         client.post("/api/calibration/2/rotate-right")
         client.post("/api/calibration/accept")

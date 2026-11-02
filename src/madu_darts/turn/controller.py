@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import cv2
@@ -79,6 +80,7 @@ class TurnController:
         config: TurnConfig | None = None,
         slots: tuple[int, ...] | None = None,
         history: int = 200,
+        on_transition: Callable[[TurnTransition], None] | None = None,
     ) -> None:
         self.board = board_model
         self.gate = motion_gate
@@ -86,6 +88,9 @@ class TurnController:
         self.config = config or TurnConfig()
         self._slots = tuple(slots or board_model.slots)
         self._lock = threading.RLock()
+        #: Called inside the controller lock right after each status/event change
+        #: (the stream (11) snapshots the state here so no transition is coalesced).
+        self.on_transition = on_transition
 
         self._running = False
         self._status = TurnStatus.THROW
@@ -463,6 +468,11 @@ class TurnController:
         tr = TurnTransition(t_mono=float(t), status=status, event=event, num_hits=len(self._committed))
         self._history.append(tr)
         self._unread.append(tr)
+        if self.on_transition is not None:
+            try:
+                self.on_transition(tr)
+            except Exception as exc:  # a stream subscriber must never break detection
+                log.warning("on_transition failed: %s", exc)
         return tr
 
 

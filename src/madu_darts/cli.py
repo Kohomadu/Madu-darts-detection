@@ -64,6 +64,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_ingest_args(serve)
     serve.add_argument("--stream-fps", type=float, default=10.0, help="MJPEG rate for the Calibration view")
     serve.add_argument("--synthetic", action="store_true", help="use rendered Board views instead of USB cameras (UI dev)")
+    serve.add_argument(
+        "--synthetic-throws",
+        action="store_true",
+        help="with --synthetic: loop a scripted visit (3 darts, hand, empty) to exercise the Detection view",
+    )
     serve.add_argument("--log-level", default="info")
 
     record = sub.add_parser("record", help="record Autodarts visits + cam frames (dev tool)")
@@ -188,12 +193,13 @@ def main(argv: list[str] | None = None) -> int:
 
         config = ServiceConfig(ingest=ingest_config_from_args(args), stream_fps=args.stream_fps)
         ingest_factory = None
-        if args.synthetic:
+        if args.synthetic or args.synthetic_throws:
             from madu_darts.server.synthetic_ingest import SyntheticIngest
 
-            ingest_factory = SyntheticIngest
+            script = bool(args.synthetic_throws)
+            ingest_factory = lambda cfg: SyntheticIngest(cfg, script=script)  # noqa: E731
         app = create_app(DetectionService(config, ingest_factory=ingest_factory))
-        logging.getLogger("madu_darts").info("Calibration view on http://%s:%d/", args.host, args.port)
+        logging.getLogger("madu_darts").info("Calibration view on http://%s:%d/ · Detection view on /detection", args.host, args.port)
         uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
         return 0
     if args.command == "record":

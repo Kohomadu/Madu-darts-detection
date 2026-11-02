@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -38,6 +39,8 @@ class ServiceConfig:
     first_frame_timeout_s: float = 3.0
     stream_fps: float = 10.0
     jpeg_quality: int = 80
+    #: Published ``/api/state`` snapshots kept for late WS subscribers to catch up on.
+    state_log: int = 256
 
 
 class FramePump(threading.Thread):
@@ -126,11 +129,16 @@ class DetectionService:
             self.hit_detector,
             config=self._config.turn,
             slots=slots,
+            on_transition=lambda _tr: self.publish_state(),
         )
         self._ingest: CameraIngest | None = None
         self._pump: FramePump | None = None
         self._lock = threading.RLock()
         self.camera_error: str | None = None
+        # Autodarts-shaped state stream (ADR 0004): every change appends a full snapshot.
+        self._state_cv = threading.Condition()
+        self._state_seq = 0
+        self._state_log: deque[tuple[int, dict[str, Any]]] = deque(maxlen=self._config.state_log)
 
     # --- lifecycle ---
 
@@ -286,6 +294,54 @@ class DetectionService:
 
     def drain_settled(self) -> list[SettledChange]:
         return self.motion_gate.drain_events()
+
+    # --- Autodarts-shaped state + change stream (ticket 11, ADR 0004) ---
+
+    def api_state(self) -> dict[str, Any]:
+        """``GET /api/state``: Autodarts 2.1 core + Madu ``calibration`` / ``cameras`` / ``madu`` blocks."""
+        snap = self.turn.snapshot()
+        state = snap.to_autodarts_state()
+        calibration = self.session.snapshot()
+        state["calibration"] = calibration
+        state["cameras"] = {"open": self._ingest is not None and self._ingest.is_open, "error": self.camera_error}
+        state["madu"] = {
+            "numThrows": len(snap.hits),
+            "standby": snap.standby,
+            "pending": snap.pending,
+            "bounceOuts": [b.to_api() for b in snap.bounce_outs],
+            "ignoredChanges": snap.ignored_changes,
+            "hits": [h.to_api() for h in snap.hits],
+            "calibrationAccepted": bool(calibration["accepted"]),
+            "version": snap.version,
+        }
+        return state
+
+    def publish_state(self) -> int:
+        """Append the current ``/api/state`` to the log and wake WS subscribers; returns its seq."""
+        state = self.api_state()
+        with self._state_cv:
+            if self._state_log and self._state_log[-1][1] == state:
+                return self._state_seq  # nothing changed (e.g. transition + explicit publish)
+            self._state_seq += 1
+            self._state_log.append((self._state_seq, state))
+            self._state_cv.notify_all()
+            return self._state_seq
+
+    @property
+    def state_seq(self) -> int:
+        with self._state_cv:
+            return self._state_seq
+
+    def states_since(self, after_seq: int) -> list[tuple[int, dict[str, Any]]]:
+        with self._state_cv:
+            return [(seq, st) for seq, st in self._state_log if seq > after_seq]
+
+    def wait_for_states(self, after_seq: int, timeout_s: float) -> list[tuple[int, dict[str, Any]]]:
+        """Block (worker thread) until a state newer than ``after_seq`` exists or ``timeout_s`` passes."""
+        with self._state_cv:
+            if self._state_seq <= after_seq:
+                self._state_cv.wait(timeout=max(0.0, timeout_s))
+            return [(seq, st) for seq, st in self._state_log if seq > after_seq]
 
     def api_config(self) -> dict[str, Any]:
         """Madu ``GET /api/config`` — motion knobs + cam summary."""
