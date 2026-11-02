@@ -29,7 +29,10 @@ First milestone: local Python three-cam detection process + Calibration / Detect
   [10](issues/10-turn-takeout-state-machine.md) Turn/takeout state machine (auto) →
   [11](issues/11-detection-view-event-stream.md) Detection view + Madu stream (auto).
   Decisions: real labelled data first (Autodarts local `throws[]` as reference); classical tip before learned; Autodarts-2.1-shaped local stream ([ADR 0004](../../docs/adr/0004-autodarts-shaped-local-stream.md)); Detection view in the same `:3181` app.
-- Residual overlay ([19](issues/19-calib-residual-overlay.md) resolved): after Auto, measured wire/ring samples are drawn on the Calibration tile (green → red by Board-mm error, magenta arcs on the foreshortened double). `GET /api/calibration` adds `maxResidualMm` and `farDouble` (all samples, not inlier-only). Live empty Board capture `20261102T183706-8fded2`: badge RMS ~1.4 mm while cam0 far-double RMS is 4.6 mm (max 12.5). Accept thresholds unchanged (23).
+- Residual overlay ([19](issues/19-calib-residual-overlay.md) resolved): after Auto, measured wire/ring samples are drawn on the Calibration tile (green → red by Board-mm error, magenta arcs on the foreshortened double). `GET /api/calibration` adds `maxResidualMm` and `farDouble` (all samples, not inlier-only). Live empty Board capture `20261102T183706-8fded2`: badge RMS ~1.4 mm while cam0 far-double RMS is 4.6 mm (max 12.5).
+- Accept gate v2 ([23](issues/23-calib-accept-quality-gate-v2.md) resolved): far-double RMS > 4.0 mm or max > 7.0 mm → FAIL + Accept blocked; WARN demotion above 3.0 / 5.5. Live empty Board: cam0/cam2 blocked, cam1 Acceptable. `acceptGate` on `/api/calibration`.
+- Occlusion-aware fusion ([24](issues/24-fusion-occlusion-drop.md) resolved): drop cams whose tip sits in a prior Hit footprint (pad 24 px) or near a prior tip (8 mm) while peers moved on. 07 replay **21/24** (↑ from 20).
+- Treble-wire prefer ([25](issues/25-fusion-treble-wire-prefer.md) resolved): keep on-treble vote(s) when peers straddle just inside/outside the treble wires (±8 mm). Twin of outer-double prefer-inside.
 
 ## Fog
 
@@ -38,13 +41,10 @@ First milestone: local Python three-cam detection process + Calibration / Detect
 - Wire nudge ([20](issues/20-calib-wire-nudge.md), unblocked — 19 resolved).
 - Radii from labels ([21](issues/21-geometry-radii-from-labels.md)): WDF vs Autodarts-implied wire-centre radii.
 - Distortion k1/k2 ([22](issues/22-calib-distortion-k1k2.md), premium, blocked by 21).
-- Accept gate v2 ([23](issues/23-calib-accept-quality-gate-v2.md), blocked by 15).
 - Homography-only vs later PnP/triangulation if doubles stay noisy after 19–22.
 
 ### Tip / fusion / learned
 
-- Occlusion-aware fusion ([24](issues/24-fusion-occlusion-drop.md), `ready-for-agent`).
-- Treble-wire prefer ([25](issues/25-fusion-treble-wire-prefer.md), `ready-for-agent`) — S↔T twin of double-wire fix.
 - Labelled corpus ≥100 ([26](issues/26-labelled-corpus-100.md)) → go/no-go for ONNX tip-in-crop ([27](issues/27-onnx-tip-in-crop.md)); umbrella [12](issues/12-learned-tip-detector.md).
 
 ### Product / reliability

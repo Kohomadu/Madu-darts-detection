@@ -345,7 +345,15 @@ class TurnController:
         if not self.detector.pending or not (force or self.detector.ready(t)):
             return
         before = {s: ref for s in self._slots if (ref := self.board.reference(s)) is not None}
-        hit = self.detector.poll(t, force=force, latest_frames=frames)
+        prior_footprints = [dict(rec.footprints) for rec in self._committed]
+        prior_tips_mm = [(rec.hit.x_mm, rec.hit.y_mm) for rec in self._committed]
+        hit = self.detector.poll(
+            t,
+            force=force,
+            latest_frames=frames,
+            prior_footprints=prior_footprints or None,
+            prior_tips_mm=prior_tips_mm or None,
+        )
         footprints = dict(self._offered)
         self._offered.clear()
         if hit is None:

@@ -7,7 +7,7 @@ from itertools import combinations
 
 import numpy as np
 
-from madu_darts.board import DOUBLE_OUTER_MM
+from madu_darts.board import DOUBLE_OUTER_MM, TREBLE_INNER_MM, TREBLE_OUTER_MM
 from madu_darts.hits.config import FusionConfig
 
 # Observed on live Autodarts 2.1 ``throws[].method``.
@@ -24,10 +24,67 @@ class FusedPoint:
     used_slots: tuple[int, ...]
     dropped_slots: tuple[int, ...]
     spread_mm: float
+    occluded_slots: tuple[int, ...] = ()
 
     @property
     def board_mm(self) -> tuple[float, float]:
         return (self.x_mm, self.y_mm)
+
+
+Box = tuple[int, int, int, int]  # x, y, w, h full-res px
+
+
+def tip_in_padded_box(tip_px: tuple[float, float] | np.ndarray, box: Box, pad_px: float) -> bool:
+    """True when the tip lies inside ``box`` expanded by ``pad_px`` on each side."""
+    x, y, w, h = box
+    u, v = float(tip_px[0]), float(tip_px[1])
+    return (x - pad_px) <= u <= (x + w + pad_px) and (y - pad_px) <= v <= (y + h + pad_px)
+
+
+def occluded_slots(
+    tips_px: dict[int, tuple[float, float]],
+    tips_mm: dict[int, tuple[float, float]],
+    *,
+    prior_footprints: list[dict[int, Box]] | None = None,
+    prior_tips_mm: list[tuple[float, float]] | None = None,
+    bbox_pad_px: float = 24.0,
+    tip_radius_mm: float = 8.0,
+) -> frozenset[int]:
+    """Slots whose tip likely locked onto a previously stuck dart (ticket 24).
+
+    A slot is occluded when:
+
+    1. its tip pixel sits inside that cam's padded footprint from a prior Hit, or
+    2. its Board-mm tip is within ``tip_radius_mm`` of a prior tip **and** at least
+       one other cam in this group is farther from that prior tip — so peers see
+       a new dart while this cam stayed on the old one.
+    """
+    out: set[int] = set()
+    footprints = prior_footprints or []
+    priors = list(prior_tips_mm or [])
+    for slot, tip_px in tips_px.items():
+        for fp in footprints:
+            box = fp.get(slot)
+            if box is not None and tip_in_padded_box(tip_px, box, bbox_pad_px):
+                out.add(int(slot))
+                break
+
+    if priors and len(tips_mm) >= 2:
+        for slot, tip in tips_mm.items():
+            p = np.asarray(tip, dtype=np.float64)
+            for prior in priors:
+                q = np.asarray(prior, dtype=np.float64)
+                if float(np.linalg.norm(p - q)) > tip_radius_mm:
+                    continue
+                others_far = any(
+                    float(np.linalg.norm(np.asarray(tips_mm[o], dtype=np.float64) - q)) > tip_radius_mm
+                    for o in tips_mm
+                    if o != slot
+                )
+                if others_far:
+                    out.add(int(slot))
+                    break
+    return frozenset(out)
 
 
 def _dist(a: np.ndarray, b: np.ndarray) -> float:
@@ -68,12 +125,52 @@ def _resolve_double_outer_straddle(
     return inside, MAJORITY if len(inside) >= 2 else SINGLE
 
 
+# Only treat tips this close to a treble wire as a straddle (not deep singles).
+_TREBLE_STRADDLE_MM = 8.0
+
+
+def _resolve_treble_wire_straddle(
+    used: list[int],
+    pts: dict[int, np.ndarray],
+    conf: dict[int, float],
+    method: str,
+) -> tuple[list[int], str]:
+    """If used cams straddle a treble wire, keep only the on-treble vote(s).
+
+    Ticket 25 / live S↔T: cams within ``agree_mm`` but some just inside
+    treble-inner (or just outside treble-outer) while another is on the treble
+    band — the mean slides to Single. Prefer tips in ``[TREBLE_INNER, TREBLE_OUTER]``.
+    Deep singles / doubles are ignored so normal UnanimousCam groups stay intact.
+    """
+    if len(used) < 2:
+        return used, method
+    radii = {s: _radius_mm(pts[s]) for s in used}
+    on_treble = [s for s in used if TREBLE_INNER_MM <= radii[s] <= TREBLE_OUTER_MM]
+    near_inner = [
+        s
+        for s in used
+        if TREBLE_INNER_MM - _TREBLE_STRADDLE_MM <= radii[s] < TREBLE_INNER_MM
+    ]
+    near_outer = [
+        s
+        for s in used
+        if TREBLE_OUTER_MM < radii[s] <= TREBLE_OUTER_MM + _TREBLE_STRADDLE_MM
+    ]
+    off_near = near_inner + near_outer
+    if not on_treble or not off_near:
+        return used, method
+    if len(on_treble) == 1:
+        return on_treble, SINGLE
+    return on_treble, MAJORITY
+
+
 def fuse_points(
     points_mm: dict[int, tuple[float, float]],
     confidences: dict[int, float] | None = None,
     config: FusionConfig | None = None,
     *,
     fit_ok: dict[int, bool] | None = None,
+    occluded: frozenset[int] | set[int] | None = None,
 ) -> FusedPoint | None:
     """Mean of agreeing cams with outlier rejection.
 
@@ -91,6 +188,12 @@ def fuse_points(
 
     Live follow-up: cams that spatially agree but straddle the outer double wire
     keep only the inside vote(s) so a soft tip just outside cannot flip D→M.
+
+    Ticket 25: same idea on the treble annulus — keep on-treble vote(s) when peers
+    straddle into Single inside treble-inner or outside treble-outer.
+
+    Ticket 24: ``occluded`` cams (tip in a prior dart footprint / stuck on a prior
+    tip while peers moved on) are dropped when at least one clear cam remains.
     """
     cfg = config or FusionConfig()
     max_r = float(cfg.max_hit_radius_mm)
@@ -103,6 +206,7 @@ def fuse_points(
     conf = confidences or {}
     # Missing fit_ok → treat every cam as healthy (legacy / replay without quality).
     healthy = {s: True if fit_ok is None else bool(fit_ok.get(s, True)) for s in slots}
+    occluded_set = frozenset(int(s) for s in (occluded or ()) if int(s) in pts)
 
     def best_single(candidates: list[int]) -> list[int]:
         return [max(candidates, key=lambda s: (healthy[s], conf.get(s, 0.0)))]
@@ -119,6 +223,12 @@ def fuse_points(
         if agreeing(good):
             pool = good
 
+    # Ticket 24: drop occluded cams only while a clear peer remains.
+    if cfg.drop_occluded_cams and occluded_set:
+        clear = [s for s in pool if s not in occluded_set]
+        if clear:
+            pool = clear
+
     if len(pool) == 1:
         used, method = pool, SINGLE
     elif agreeing(pool):
@@ -132,6 +242,7 @@ def fuse_points(
             used, method = best_single(pool), SINGLE
 
     used, method = _resolve_double_outer_straddle(used, pts, conf, method)
+    used, method = _resolve_treble_wire_straddle(used, pts, conf, method)
 
     stack = np.vstack([pts[s] for s in used])
     centre = stack.mean(axis=0)
@@ -146,7 +257,17 @@ def fuse_points(
         used_slots=tuple(sorted(used)),
         dropped_slots=dropped,
         spread_mm=spread,
+        occluded_slots=tuple(sorted(occluded_set)),
     )
 
 
-__all__ = ["MAJORITY", "SINGLE", "UNANIMOUS", "FusedPoint", "fuse_points", "on_board"]
+__all__ = [
+    "MAJORITY",
+    "SINGLE",
+    "UNANIMOUS",
+    "FusedPoint",
+    "fuse_points",
+    "occluded_slots",
+    "on_board",
+    "tip_in_padded_box",
+]

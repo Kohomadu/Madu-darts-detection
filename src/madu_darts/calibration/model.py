@@ -38,6 +38,32 @@ PASS_MIN_INLIERS = 100
 WARN_MIN_COVERAGE = 0.30
 WARN_MIN_INLIERS = 40
 
+# Ticket 23: Accept / badge gate on the foreshortened double (all measured samples).
+# Tuned on live empty Board after ticket 19 (2026-11-02): soft cam0 farDouble
+# ~5.4 / 8.5 mm must not Accept; healthier cam1-class ~3.5 / 6.0 mm still may.
+ACCEPT_FAR_DOUBLE_RMS_MM = 4.0
+ACCEPT_FAR_DOUBLE_MAX_MM = 7.0
+WARN_FAR_DOUBLE_RMS_MM = 3.0
+WARN_FAR_DOUBLE_MAX_MM = 5.5
+
+
+@dataclass(frozen=True)
+class AcceptGateParams:
+    """Tunable Accept / badge thresholds for residual overlay metrics (ticket 23)."""
+
+    far_double_rms_mm: float = ACCEPT_FAR_DOUBLE_RMS_MM
+    far_double_max_mm: float = ACCEPT_FAR_DOUBLE_MAX_MM
+    warn_far_double_rms_mm: float = WARN_FAR_DOUBLE_RMS_MM
+    warn_far_double_max_mm: float = WARN_FAR_DOUBLE_MAX_MM
+
+    def to_api(self) -> dict[str, float]:
+        return {
+            "farDoubleRmsMm": self.far_double_rms_mm,
+            "farDoubleMaxMm": self.far_double_max_mm,
+            "warnFarDoubleRmsMm": self.warn_far_double_rms_mm,
+            "warnFarDoubleMaxMm": self.warn_far_double_max_mm,
+        }
+
 
 class FitStatus(str, Enum):
     """Per-cam Calibration quality shown in the Calibration view."""
@@ -90,6 +116,77 @@ def status_for_rms(
         # Bound the Board loosely but coverage is thin → still warn (Acceptable).
         return FitStatus.WARN
     return FitStatus.FAIL
+
+
+_STATUS_RANK = {
+    FitStatus.NONE: 0,
+    FitStatus.PASS: 1,
+    FitStatus.WARN: 2,
+    FitStatus.FAIL: 3,
+}
+
+
+def worse_status(a: FitStatus, b: FitStatus) -> FitStatus:
+    return a if _STATUS_RANK[a] >= _STATUS_RANK[b] else b
+
+
+def far_double_status(
+    far_double: dict[str, Any] | None,
+    params: AcceptGateParams | None = None,
+) -> FitStatus | None:
+    """Stricter badge from far-double residuals, or ``None`` when that band is unmeasured."""
+    if far_double is None:
+        return None
+    p = params or AcceptGateParams()
+    rms = far_double.get("rmsMm")
+    mx = far_double.get("maxMm")
+    if rms is None and mx is None:
+        return None
+    rms_v = float(rms) if rms is not None else 0.0
+    max_v = float(mx) if mx is not None else 0.0
+    if rms_v > p.far_double_rms_mm or max_v > p.far_double_max_mm:
+        return FitStatus.FAIL
+    if rms_v > p.warn_far_double_rms_mm or max_v > p.warn_far_double_max_mm:
+        return FitStatus.WARN
+    return FitStatus.PASS
+
+
+def accept_block_reasons(
+    cal: CamCalibration,
+    *,
+    error: str | None = None,
+    params: AcceptGateParams | None = None,
+) -> list[str]:
+    """Human-readable reasons this cam blocks Accept (empty when Acceptable)."""
+    p = params or AcceptGateParams()
+    if not cal.has_fit:
+        return [error or "no Board-plane fit"]
+
+    if cal.residuals is not None and cal.homography is not None:
+        from madu_darts.calibration.residuals import summarize_residuals
+
+        far = summarize_residuals(cal.residuals, cal.homography, cal.rotate_offset).get("farDouble")
+        if far is not None:
+            rms = far.get("rmsMm")
+            mx = far.get("maxMm")
+            if rms is not None and float(rms) > p.far_double_rms_mm:
+                return [
+                    f"far double RMS {float(rms):.2f} mm > {p.far_double_rms_mm:.1f} mm "
+                    "(soft foreshortened double)"
+                ]
+            if mx is not None and float(mx) > p.far_double_max_mm:
+                return [
+                    f"far double max residual {float(mx):.2f} mm > {p.far_double_max_mm:.1f} mm "
+                    "(soft foreshortened double)"
+                ]
+
+    if cal.status in (FitStatus.PASS, FitStatus.WARN):
+        return []
+    if error:
+        return [error]
+    if cal.rms_mm is None:
+        return ["no Board-plane fit"]
+    return [f"fit RMS {cal.rms_mm:.2f} mm too high"]
 
 
 class CalibrationNotAccepted(RuntimeError):
@@ -205,12 +302,24 @@ class CamCalibration:
 
     @property
     def status(self) -> FitStatus:
-        """``NONE`` without a fit; a fit with unknown RMS is ``WARN`` (operator judges)."""
+        """``NONE`` without a fit; a fit with unknown RMS is ``WARN`` (operator judges).
+
+        When residual samples exist (ticket 19/23), a soft foreshortened double can
+        demote PASS → WARN or FAIL even if the inlier-only RMS badge looked green.
+        """
         if self.homography is None:
             return FitStatus.NONE
         if self.rms_mm is None:
-            return FitStatus.WARN
-        return status_for_rms(self.rms_mm, n_inliers=self.n_inliers, n_points=self.n_points)
+            base = FitStatus.WARN
+        else:
+            base = status_for_rms(self.rms_mm, n_inliers=self.n_inliers, n_points=self.n_points)
+        if self.residuals is None:
+            return base
+        from madu_darts.calibration.residuals import summarize_residuals
+
+        far = summarize_residuals(self.residuals, self.homography, self.rotate_offset).get("farDouble")
+        extra = far_double_status(far)
+        return base if extra is None else worse_status(base, extra)
 
     def rotated(self, delta_sectors: int) -> CamCalibration:
         return replace(self, rotate_offset=(self.rotate_offset + delta_sectors) % SECTORS)

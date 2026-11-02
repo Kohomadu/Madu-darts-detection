@@ -21,6 +21,7 @@ from madu_darts.hits import (
     autodarts_segment_fields,
     fuse_points,
     locate_tip,
+    occluded_slots,
 )
 
 WHITE = (255, 255, 255)
@@ -72,10 +73,10 @@ def test_locate_tip_rejects_no_change_and_hand_like_blob() -> None:
 
 def test_fuse_unanimous_majority_single() -> None:
     cfg = FusionConfig(agree_mm=15.0)
-    close = {0: (10.0, 100.0), 1: (12.0, 103.0), 2: (9.0, 98.0)}
+    close = {0: (10.0, 100.0), 1: (12.0, 103.0), 2: (9.0, 101.0)}
     fused = fuse_points(close, config=cfg)
     assert fused is not None and fused.method == UNANIMOUS and fused.used_slots == (0, 1, 2)
-    assert abs(fused.x_mm - 31 / 3) < 1e-9 and abs(fused.y_mm - 301 / 3) < 1e-9
+    assert abs(fused.x_mm - 31 / 3) < 1e-9 and abs(fused.y_mm - 304 / 3) < 1e-9
 
     outlier = {0: (10.0, 100.0), 1: (12.0, 103.0), 2: (90.0, -40.0)}
     fused = fuse_points(outlier, config=cfg)
@@ -112,11 +113,30 @@ def test_fuse_prefers_inside_double_when_cams_straddle_outer_wire() -> None:
     assert point_mm_to_segment(fused.x_mm, fused.y_mm).name == "D18"
 
 
+def test_fuse_prefers_on_treble_when_cams_straddle_treble_wire() -> None:
+    """Ticket 25: mean slides inside treble-inner → S; keep the on-treble cam(s)."""
+    cfg = FusionConfig(agree_mm=15.0)
+    # Cam0 on T20 (r≈103); cams 1+2 just inside treble-inner (Single) within agree_mm.
+    points = {0: (0.0, 103.4), 1: (0.0, 96.0), 2: (1.0, 95.5)}
+    # Plain mean of all three would be ~r=98.3 → Single; prefer keeps cam0 on T20.
+    mean_y = (103.4 + 96.0 + 95.5) / 3.0
+    assert point_mm_to_segment(0.0, mean_y).bed != "Treble"
+    fused = fuse_points(points, {0: 0.5, 1: 0.7, 2: 0.65}, config=cfg)
+    assert fused is not None
+    assert fused.used_slots == (0,)
+    assert point_mm_to_segment(fused.x_mm, fused.y_mm).name == "T20"
+    # Two on-treble vs one inside → Cam+1 on the treble pair.
+    pair = {0: (0.0, 103.4), 1: (1.0, 104.0), 2: (0.0, 96.0)}
+    fused2 = fuse_points(pair, config=cfg)
+    assert fused2 is not None and fused2.used_slots == (0, 1)
+    assert point_mm_to_segment(fused2.x_mm, fused2.y_mm).name == "T20"
+
+
 def test_fuse_drops_warn_cam_when_two_pass_cams_agree() -> None:
     """Ticket 15: soft Calibration must not veto a tight Cam+1 pair."""
     cfg = FusionConfig(agree_mm=15.0, prefer_pass_cams=True)
-    # Cams 1+2 agree on T20; cam0 (warn) pulls several mm out.
-    points = {0: (8.0, 112.0), 1: (0.0, 103.0), 2: (1.0, 104.0)}
+    # Cams 1+2 agree on T20; cam0 (warn) pulls into the outer single (not a treble-wire straddle).
+    points = {0: (8.0, 120.0), 1: (0.0, 103.0), 2: (1.0, 104.0)}
     fused = fuse_points(points, config=cfg, fit_ok={0: False, 1: True, 2: True})
     assert fused is not None
     assert fused.method == MAJORITY
@@ -126,9 +146,10 @@ def test_fuse_drops_warn_cam_when_two_pass_cams_agree() -> None:
     tight = {0: (0.0, 103.0), 1: (1.0, 104.0), 2: (-1.0, 102.5)}
     uni = fuse_points(tight, config=cfg, fit_ok={0: True, 1: True, 2: True})
     assert uni is not None and uni.method == UNANIMOUS and uni.used_slots == (0, 1, 2)
-    # Without fit_ok, legacy behaviour keeps the soft third cam when all agree loosely.
-    loose = fuse_points(points, config=cfg, fit_ok=None)
-    assert loose is not None and 0 in loose.used_slots
+    # Without fit_ok, a soft third cam that still spatially agrees is kept (no treble straddle).
+    loose_pts = {0: (2.0, 105.0), 1: (0.0, 103.0), 2: (1.0, 104.0)}
+    loose = fuse_points(loose_pts, config=cfg, fit_ok=None)
+    assert loose is not None and 0 in loose.used_slots and loose.method == UNANIMOUS
 
 
 def test_fuse_rejects_off_board_arm_tips() -> None:
@@ -145,6 +166,55 @@ def test_fuse_rejects_off_board_arm_tips() -> None:
     # Just outside the double (real miss) still allowed.
     near = fuse_points({0: (-23.8, 173.4)}, config=cfg)
     assert near is not None and math.hypot(near.x_mm, near.y_mm) < 200.0
+
+
+def test_fuse_drops_occluded_cam_when_peers_remain() -> None:
+    """Ticket 24: cam locked on dart 1 must not pull dart 2 across a sector wire."""
+    from madu_darts.calibration.homography import polar_mm
+
+    cfg = FusionConfig(agree_mm=15.0)
+    # Cam 0 still on the S20 side of the 20|1 wire; cams 1+2 see the new dart on S1.
+    # Within agree_mm the classical mean flips to T20; dropping cam 0 keeps T1.
+    points = {0: polar_mm(100.0, 5.0), 1: polar_mm(100.0, 10.0), 2: polar_mm(100.0, 11.0)}
+    classical = fuse_points(points, {0: 0.95, 1: 0.5, 2: 0.5}, config=cfg)
+    assert classical is not None
+    assert point_mm_to_segment(classical.x_mm, classical.y_mm).name == "T20"
+    fused = fuse_points(points, {0: 0.95, 1: 0.5, 2: 0.5}, config=cfg, occluded={0})
+    assert fused is not None
+    assert 0 not in fused.used_slots
+    assert fused.occluded_slots == (0,)
+    assert point_mm_to_segment(fused.x_mm, fused.y_mm).name == "T1"
+    # All cams "occluded" (clustered real darts) → keep classical pool.
+    all_near = {0: (0.0, 103.0), 1: (1.0, 104.0), 2: (-1.0, 102.5)}
+    kept = fuse_points(all_near, config=cfg, occluded={0, 1, 2})
+    assert kept is not None and kept.method == UNANIMOUS and kept.used_slots == (0, 1, 2)
+
+
+def test_occluded_slots_from_footprint_and_prior_tip() -> None:
+    tips_px = {0: (100.0, 200.0), 1: (500.0, 400.0), 2: (510.0, 405.0)}
+    tips_mm = {0: (-36.0, -97.0), 1: (0.0, 103.4), 2: (1.0, 102.0)}
+    # Prior dart footprint only on cam 0; tip sits inside it.
+    footprints = [{0: (80, 180, 40, 40), 1: (10, 10, 20, 20)}]
+    marked = occluded_slots(
+        tips_px,
+        tips_mm,
+        prior_footprints=footprints,
+        prior_tips_mm=[(-36.0, -97.0)],
+        bbox_pad_px=8.0,
+        tip_radius_mm=8.0,
+    )
+    assert 0 in marked
+    assert 1 not in marked and 2 not in marked
+
+    # Board-mm rule alone: cam 0 on prior tip, peers on a new tip → cam 0 occluded.
+    marked_mm = occluded_slots(
+        {0: (0.0, 0.0), 1: (0.0, 0.0), 2: (0.0, 0.0)},
+        tips_mm,
+        prior_footprints=[],
+        prior_tips_mm=[(-36.0, -97.0)],
+        tip_radius_mm=8.0,
+    )
+    assert marked_mm == frozenset({0})
 
 
 def test_autodarts_segment_fields_match_live_vocabulary() -> None:

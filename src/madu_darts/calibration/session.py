@@ -19,9 +19,15 @@ import numpy as np
 
 from madu_darts.calibration.autofit import AutoFitError, AutoFitParams, suggest, suggest_best
 from madu_darts.calibration.homography import image_to_board_mm
-from madu_darts.calibration.model import CalibrationNotAccepted, CamCalibration, FitStatus
-from madu_darts.calibration.residuals import summarize_residuals
+from madu_darts.calibration.model import (
+    AcceptGateParams,
+    CalibrationNotAccepted,
+    CamCalibration,
+    FitStatus,
+    accept_block_reasons,
+)
 from madu_darts.calibration.mount import load_rotate_offsets, save_rotate_offsets
+from madu_darts.calibration.residuals import summarize_residuals
 
 log = logging.getLogger(__name__)
 
@@ -49,12 +55,14 @@ class CalibrationSession:
         suggester: Suggester = suggest,
         default_rotate_offsets: Mapping[int, int] | None = None,
         offset_store: Path | str | None = None,
+        accept_gate: AcceptGateParams | None = None,
     ) -> None:
         self._slots = tuple(int(s) for s in slots)
         if not self._slots:
             raise ValueError("CalibrationSession needs at least one slot")
         self._params = params
         self._suggester = suggester
+        self._accept_gate = accept_gate or AcceptGateParams()
         self._offset_store = None if offset_store is None else Path(offset_store)
         # Empty defaults unless the product wiring (DetectionService) passes the Board mounts.
         defaults = dict(default_rotate_offsets or {})
@@ -83,16 +91,22 @@ class CalibrationSession:
         with self._lock:
             return self._errors[self._check(slot)]
 
+    @property
+    def accept_gate(self) -> AcceptGateParams:
+        return self._accept_gate
+
     def blockers(self) -> list[str]:
-        """Why Accept is currently refused (empty when it would succeed)."""
+        """Why Accept is currently refused (empty when it would succeed).
+
+        Ticket 23: a PASS badge from inlier-only RMS is not enough — a soft
+        foreshortened double (residual overlay) also blocks Accept.
+        """
         with self._lock:
             out: list[str] = []
             for slot in self._slots:
                 cal = self._cals[slot]
-                if cal.status in ACCEPTABLE:
-                    continue
-                reason = self._errors[slot] or ("no Board-plane fit" if not cal.has_fit else f"fit RMS {cal.rms_mm:.2f} mm too high")
-                out.append(f"cam {slot}: {reason}")
+                for reason in accept_block_reasons(cal, error=self._errors[slot], params=self._accept_gate):
+                    out.append(f"cam {slot}: {reason}")
             return out
 
     def can_accept(self) -> bool:
@@ -243,6 +257,7 @@ class CalibrationSession:
                 "accepted": self._accepted,
                 "canAccept": not self.blockers(),
                 "blockers": self.blockers(),
+                "acceptGate": self._accept_gate.to_api(),
                 "cams": cams,
             }
 

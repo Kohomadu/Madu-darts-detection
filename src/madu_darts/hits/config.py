@@ -61,6 +61,13 @@ class FusionConfig:
     max_hit_radius_mm: float = 200.0
     #: Ticket 15: when True, a non-pass cam is dropped if two pass cams already agree.
     prefer_pass_cams: bool = True
+    #: Ticket 24: drop cams whose tip sits in a prior dart footprint / near a stuck tip.
+    drop_occluded_cams: bool = True
+    #: Full-res pad around a committed Hit's settled bbox when testing tip occlusion.
+    occlusion_bbox_pad_px: float = 24.0
+    #: Board-mm radius around a prior tip: a cam tip this close is occluded only when
+    #: at least one other cam is farther away (locked onto the old dart).
+    occlusion_tip_radius_mm: float = 8.0
 
     def to_api(self) -> dict[str, Any]:
         return {
@@ -69,6 +76,9 @@ class FusionConfig:
             "minCams": self.min_cams,
             "maxHitRadiusMm": self.max_hit_radius_mm,
             "preferPassCams": self.prefer_pass_cams,
+            "dropOccludedCams": self.drop_occluded_cams,
+            "occlusionBboxPadPx": self.occlusion_bbox_pad_px,
+            "occlusionTipRadiusMm": self.occlusion_tip_radius_mm,
         }
 
 

@@ -17,7 +17,7 @@ import numpy as np
 
 from madu_darts.board.geometry import point_mm_to_segment
 from madu_darts.hits.config import FusionConfig, TipConfig
-from madu_darts.hits.fusion import fuse_points, on_board
+from madu_darts.hits.fusion import fuse_points, occluded_slots, on_board
 from madu_darts.hits.hit import Hit, SlotVote
 from madu_darts.hits.tip import TipCandidate, locate_tip
 from madu_darts.motion import BoardModel, SettledChange
@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 
 BoardPointFn = Callable[[int, tuple[float, float]], Any]
 FitOkFn = Callable[[], dict[int, bool]]
+Box = tuple[int, int, int, int]
 
 
 @dataclass
@@ -141,8 +142,15 @@ class HitDetector:
         *,
         force: bool = False,
         latest_frames: dict[int, np.ndarray] | None = None,
+        prior_footprints: list[dict[int, Box]] | None = None,
+        prior_tips_mm: list[tuple[float, float]] | None = None,
     ) -> Hit | None:
-        """Emit a Hit when the group is complete (or ``force``); commits frames into the BoardModel."""
+        """Emit a Hit when the group is complete (or ``force``); commits frames into the BoardModel.
+
+        ``prior_footprints`` / ``prior_tips_mm`` are already-committed darts in this Turn
+        (ticket 24): tips that locked onto those footprints are dropped in fusion when
+        another cam remains clear.
+        """
         pending = self._pending
         if pending is None:
             return None
@@ -151,11 +159,23 @@ class HitDetector:
         self._pending = None
 
         fit_ok = self._fit_ok() if self._fit_ok is not None else None
+        tips_px = {s: cand.tip_px for s, cand in pending.candidates.items()}
+        occluded = occluded_slots(
+            tips_px,
+            pending.points_mm,
+            prior_footprints=prior_footprints,
+            prior_tips_mm=prior_tips_mm,
+            bbox_pad_px=self.fusion_config.occlusion_bbox_pad_px,
+            tip_radius_mm=self.fusion_config.occlusion_tip_radius_mm,
+        )
+        if occluded:
+            log.info("occlusion drop candidates: slots %s", sorted(occluded))
         fused = fuse_points(
             pending.points_mm,
             {s: c.confidence for s, c in pending.candidates.items()},
             self.fusion_config,
             fit_ok=fit_ok,
+            occluded=occluded,
         )
         # Fold the settled frames into the background regardless, so a missed
         # dart does not pollute the next diff.
@@ -192,6 +212,7 @@ class HitDetector:
             t_mono=float(max(c for c in [pending.first_t] + [now])),
             slot_votes=votes,
             spread_mm=fused.spread_mm,
+            occluded_slots=fused.occluded_slots,
         )
 
 

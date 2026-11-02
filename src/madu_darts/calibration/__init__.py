@@ -34,16 +34,24 @@ from madu_darts.calibration.homography import (
     wire_ring_intersections_mm,
 )
 from madu_darts.calibration.model import (
+    ACCEPT_FAR_DOUBLE_MAX_MM,
+    ACCEPT_FAR_DOUBLE_RMS_MM,
     PASS_RMS_MM,
     SECTOR_STEP_DEG,
     SECTORS,
+    WARN_FAR_DOUBLE_MAX_MM,
+    WARN_FAR_DOUBLE_RMS_MM,
     WARN_RMS_MM,
+    AcceptGateParams,
     CalibrationNotAccepted,
     CamCalibration,
     Ellipse,
     FitStatus,
     RingFit,
+    accept_block_reasons,
+    far_double_status,
     status_for_rms,
+    worse_status,
 )
 from madu_darts.calibration.overlay import (
     canonical_mm_to_px,
@@ -60,13 +68,18 @@ from madu_darts.calibration.mount import (
 from madu_darts.calibration.session import AcceptBlocked, CalibrationSession
 
 __all__ = [
+    "ACCEPT_FAR_DOUBLE_MAX_MM",
+    "ACCEPT_FAR_DOUBLE_RMS_MM",
     "DEFAULT_OFFSET_STORE",
     "DEFAULT_ROTATE_OFFSETS",
     "PASS_RMS_MM",
     "SECTORS",
     "SECTOR_STEP_DEG",
+    "WARN_FAR_DOUBLE_MAX_MM",
+    "WARN_FAR_DOUBLE_RMS_MM",
     "WARN_RMS_MM",
     "AcceptBlocked",
+    "AcceptGateParams",
     "AutoFitError",
     "AutoFitParams",
     "CalibrationNotAccepted",
@@ -77,6 +90,7 @@ __all__ = [
     "FitStatus",
     "RingFit",
     "WirePoints",
+    "accept_block_reasons",
     "apply_homography",
     "board_mm_to_image",
     "canonical_mm_to_px",
@@ -88,6 +102,7 @@ __all__ = [
     "draw_warped_board",
     "effective_homography",
     "evaluate_fit",
+    "far_double_status",
     "fit_homography",
     "FitQuality",
     "image_to_board_mm",
@@ -105,6 +120,7 @@ __all__ = [
     "status_for_rms",
     "suggest",
     "suggest_best",
+    "worse_status",
     "wire_angles_deg",
     "wire_ring_intersections_mm",
 ]

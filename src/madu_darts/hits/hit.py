@@ -76,6 +76,7 @@ class Hit:
     t_mono: float
     slot_votes: tuple[SlotVote, ...] = field(default_factory=tuple)
     spread_mm: float = 0.0
+    occluded_slots: tuple[int, ...] = ()
 
     @property
     def coords(self) -> tuple[float, float]:
@@ -113,6 +114,7 @@ class Hit:
                     "confidence": round(self.confidence, 3),
                     "spreadMm": round(self.spread_mm, 2),
                     "tMono": self.t_mono,
+                    "occludedSlots": list(self.occluded_slots),
                     "votes": [v.to_api() for v in self.slot_votes],
                 }
             }
