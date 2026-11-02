@@ -25,6 +25,13 @@ log = logging.getLogger(__name__)
 BoardPointFn = Callable[[int, tuple[float, float]], Any]
 RECHECK_METHOD = "Recheck"
 
+# Live TipConfig.min_elongation is 2.0; empty-ref multi-blob recheck sees flight/shaft
+# stubs at ~2.1 that become BestCam Miss/garbage (Board visit #6 → M7). Be stricter.
+RECHECK_MIN_ELONGATION = 3.5
+RECHECK_MIN_TIP_CONFIDENCE = 0.35
+#: Keep the prior Hit when a recheck candidate is this far (mm) and only BestCam-weak.
+RECHECK_KEEP_PRIOR_JUMP_MM = 40.0
+
 
 def _tip_from_component_points(
     pts: np.ndarray,
@@ -33,6 +40,8 @@ def _tip_from_component_points(
     area_px: int,
     config: TipConfig,
     tip_direction: tuple[float, float],
+    min_elongation: float | None = None,
+    min_confidence: float | None = None,
 ) -> TipCandidate | None:
     """Axis + tip for one connected component's pixel coordinates."""
     if len(pts) < config.min_points:
@@ -57,13 +66,17 @@ def _tip_from_component_points(
     cov = np.cov(pts_f.T)
     eigvals = np.linalg.eigvalsh(cov)
     elongation = float(eigvals[1] / max(eigvals[0], 1e-6))
-    if elongation < config.min_elongation:
+    elong_floor = float(min_elongation if min_elongation is not None else config.min_elongation)
+    if elongation < elong_floor:
         return None
     top = np.argsort(-along_in)[: max(1, config.tip_top_k)]
     tip = pts_in[top].mean(axis=0)
     flight = pts_in[int(np.argmin(along_in))]
     inlier_fraction = float(inliers.mean())
     confidence = min(1.0, inlier_fraction) * min(1.0, length / 80.0) * (1.0 if elongation >= 4.0 else 0.6)
+    conf_floor = float(min_confidence if min_confidence is not None else 0.0)
+    if confidence < conf_floor:
+        return None
     return TipCandidate(
         slot=slot,
         tip_px=(float(tip[0]), float(tip[1])),
@@ -106,13 +119,19 @@ def locate_tips_vs_empty(
         comps.append((area, label))
     comps.sort(reverse=True)
     out: list[TipCandidate] = []
-    for area, label in comps[: max_darts * 2]:  # spare rejects
+    for area, label in comps[: max_darts * 3]:  # spare rejects after strict elong/conf gates
         ys, xs = np.nonzero(labels == label)
         if len(xs) < cfg.min_points:
             continue
         pts = np.column_stack([xs, ys])
         cand = _tip_from_component_points(
-            pts, slot=slot, area_px=area, config=cfg, tip_direction=tip_direction
+            pts,
+            slot=slot,
+            area_px=area,
+            config=cfg,
+            tip_direction=tip_direction,
+            min_elongation=max(cfg.min_elongation, RECHECK_MIN_ELONGATION),
+            min_confidence=RECHECK_MIN_TIP_CONFIDENCE,
         )
         if cand is not None:
             out.append(cand)
@@ -236,6 +255,53 @@ def _order_like_previous(new_hits: list[Hit], previous: tuple[Hit, ...]) -> list
     return out[: max(len(previous), n)]
 
 
+def _n_used_cams(hit: Hit) -> int:
+    if not hit.slot_votes:
+        return 0
+    return sum(1 for v in hit.slot_votes if v.used)
+
+
+def _should_keep_previous(prev: Hit, new: Hit) -> bool:
+    """True when the recheck candidate is too weak/suspicious to overwrite ``prev``.
+
+    Allows strong corrections (wrong Segment → multi-cam / high-conf tip nearby or far).
+    Blocks Board visit #6 style stubs: BestCam Miss / mid-Board garbage with conf ~0.25.
+    """
+    if new.confidence < RECHECK_MIN_TIP_CONFIDENCE:
+        return True
+    if new.segment.bed == "Miss" and prev.segment.bed != "Miss":
+        return True
+    n_used = _n_used_cams(new)
+    dist = float(np.hypot(new.x_mm - prev.x_mm, new.y_mm - prev.y_mm))
+    # Weak single-cam tip that jumped far from the prior — likely a wrong blob.
+    if n_used <= 1 and dist >= RECHECK_KEEP_PRIOR_JUMP_MM and new.confidence < max(0.45, float(prev.confidence)):
+        return True
+    return False
+
+
+def _merge_keeping_strong_priors(ordered: list[Hit], previous: tuple[Hit, ...]) -> list[Hit]:
+    """Per-slot: keep previous when the matched recheck Hit fails quality gates."""
+    out: list[Hit] = []
+    for i, prev in enumerate(previous):
+        if i >= len(ordered):
+            out.append(prev)
+            continue
+        new = ordered[i]
+        if _should_keep_previous(prev, new):
+            log.info(
+                "recheck: keep prior Hit %d %s (rejected %s conf=%.3f method=%s)",
+                i,
+                prev.autodarts_segment_name,
+                new.autodarts_segment_name,
+                new.confidence,
+                new.method,
+            )
+            out.append(prev)
+        else:
+            out.append(new)
+    return out
+
+
 def recheck_hits(
     frames: dict[int, np.ndarray],
     empty_refs: dict[int, np.ndarray],
@@ -292,7 +358,15 @@ def recheck_hits(
     # Pad with previous if recheck found fewer.
     while len(ordered) < len(previous):
         ordered.append(previous[len(ordered)])
-    return ordered[: len(previous)]
+    ordered = ordered[: len(previous)]
+    return _merge_keeping_strong_priors(ordered, previous)
 
 
-__all__ = ["RECHECK_METHOD", "locate_tips_vs_empty", "recheck_hits"]
+__all__ = [
+    "RECHECK_KEEP_PRIOR_JUMP_MM",
+    "RECHECK_METHOD",
+    "RECHECK_MIN_ELONGATION",
+    "RECHECK_MIN_TIP_CONFIDENCE",
+    "locate_tips_vs_empty",
+    "recheck_hits",
+]

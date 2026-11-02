@@ -54,3 +54,9 @@ Recheck replaced the Manual override with a fresh vision Hit (adjacent double on
 ### Tests
 
 `tests/test_hits_recheck.py` + `tests/test_server.py::test_recheck_and_override_api`; hits/turn/server suite **44 passed**.
+
+### Follow-up hardening (Board visit #6)
+
+Live: auto `S20·T1·S8` then Recheck ×3 → `…·M7` before `…·T8`. Bad presses used stub blobs (`elong≈2.1`, `conf≈0.25`) as BestCam Miss / mid-Board junk.
+
+Shipped: recheck tip floor `elong≥3.5` / `conf≥0.35`; per-slot keep prior when new is Miss-over-on-Board, low conf, or weak BestCam jump ≥40 mm. Still allows nearby S8→T8 and far multi-cam corrections.

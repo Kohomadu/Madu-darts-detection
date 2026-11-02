@@ -10,6 +10,9 @@ from madu_darts.board import point_mm_to_segment, segment_name_to_mm
 from madu_darts.calibration.homography import apply_homography
 from madu_darts.calibration.synthetic import synthetic_camera
 from madu_darts.hits import RECHECK_METHOD, FusionConfig, Hit, TipConfig, locate_tips_vs_empty, recheck_hits
+from madu_darts.hits.recheck import _merge_keeping_strong_priors, _should_keep_previous
+from madu_darts.hits.tip import TipCandidate
+from madu_darts.hits.hit import SlotVote
 from madu_darts.turn import TurnEvent, TurnStatus
 from tests.test_hits_tip_fusion import draw_dart
 from tests.test_turn_controller import CAMS, Sim, T20, S6, S11
@@ -19,15 +22,46 @@ def _board_point(slot: int, px: tuple[float, float]) -> np.ndarray:
     return apply_homography(CAMS[slot].truth_homography, px)
 
 
-def _fake_hit(x_mm: float, y_mm: float, *, method: str = "UnanimousCam") -> Hit:
+def _fake_tip(*, slot: int = 0, confidence: float = 0.5, elongation: float = 8.0) -> TipCandidate:
+    return TipCandidate(
+        slot=slot,
+        tip_px=(100.0, 100.0),
+        flight_px=(100.0, 40.0),
+        axis_dir=(0.0, 1.0),
+        length_px=60.0,
+        inlier_fraction=0.8,
+        elongation=elongation,
+        area_px=2000,
+        confidence=confidence,
+    )
+
+
+def _fake_hit(
+    x_mm: float,
+    y_mm: float,
+    *,
+    method: str = "UnanimousCam",
+    confidence: float = 0.9,
+    used_cams: tuple[int, ...] = (0, 1),
+) -> Hit:
+    votes = tuple(
+        SlotVote(
+            slot=s,
+            tip=_fake_tip(slot=s, confidence=confidence),
+            x_mm=x_mm,
+            y_mm=y_mm,
+            used=True,
+        )
+        for s in used_cams
+    )
     return Hit(
         x_mm=x_mm,
         y_mm=y_mm,
         segment=point_mm_to_segment(x_mm, y_mm),
         method=method,
-        confidence=0.9,
+        confidence=confidence,
         t_mono=0.0,
-        slot_votes=(),
+        slot_votes=votes,
         spread_mm=1.0,
     )
 
@@ -130,3 +164,41 @@ def test_segment_name_to_mm_roundtrip_beds() -> None:
         else:
             assert seg.name == name
         assert math.hypot(x, y) < 180.0 or name.startswith("M")
+
+
+def test_recheck_keeps_prior_over_miss_stub() -> None:
+    """Board visit #6: BestCam Miss (flight stub) must not overwrite an on-Board Hit."""
+    prior = _fake_hit(-91.07, -31.23, method="Cam+1", confidence=0.414)  # S8
+    assert prior.segment.bed != "Miss"
+    stub = _fake_hit(-117.41, -138.88, method="BestCam", confidence=0.247, used_cams=(0,))  # M7
+    assert stub.segment.bed == "Miss"
+    assert _should_keep_previous(prior, stub)
+    merged = _merge_keeping_strong_priors([stub], (prior,))
+    assert merged[0] is prior
+
+
+def test_recheck_keeps_prior_over_far_weak_bestcam() -> None:
+    """Mid-board garbage BestCam far from T1 must not replace it."""
+    prior = _fake_hit(37.78, 96.95, method="UnanimousCam", confidence=0.532, used_cams=(0, 1, 2))
+    junk = _fake_hit(3.29, 65.04, method="BestCam", confidence=0.225, used_cams=(1,))
+    assert _should_keep_previous(prior, junk)
+    merged = _merge_keeping_strong_priors([junk], (prior,))
+    assert merged[0].segment.name == prior.segment.name
+
+
+def test_recheck_allows_nearby_bed_correction() -> None:
+    """S8 → T8 at the same tip (cam0) with decent conf should replace the prior."""
+    prior = _fake_hit(-91.07, -31.23, method="Cam+1", confidence=0.414)
+    better = _fake_hit(-95.17, -33.89, method="BestCam", confidence=0.523, used_cams=(0,))
+    assert prior.segment.name == "S8"
+    assert better.segment.name == "T8"
+    assert not _should_keep_previous(prior, better)
+    merged = _merge_keeping_strong_priors([better], (prior,))
+    assert merged[0].segment.name == "T8"
+
+
+def test_recheck_allows_far_correction_when_multi_cam() -> None:
+    """Wrong D16 prior can still be replaced by a strong multi-cam T20 far away."""
+    prior = _fake_hit(-135.0, -98.0, method="BestCam", confidence=0.9, used_cams=(0,))
+    corrected = _fake_hit(*T20, method=RECHECK_METHOD, confidence=0.55, used_cams=(0, 1, 2))
+    assert not _should_keep_previous(prior, corrected)
