@@ -89,6 +89,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     replay = sub.add_parser("replay", help="shadow-compare a recording through the Madu pipeline")
     replay.add_argument("recording", type=Path, help="path to a session directory (contains visit-*)")
+    replay.add_argument(
+        "--pipeline",
+        choices=("madu", "echo"),
+        default="madu",
+        help="madu = real motion/tip/fusion chain (default); echo = Autodarts labels (harness check)",
+    )
+    replay.add_argument(
+        "--rotate-offsets",
+        default=None,
+        help="pin rotate-20 per cam as 'o0,o1,o2' instead of resolving from labels",
+    )
     replay.add_argument("--log-level", default="info")
     return parser
 
@@ -146,9 +157,17 @@ def _cmd_record(args: argparse.Namespace) -> int:
 
 
 def _cmd_replay(args: argparse.Namespace) -> int:
-    from madu_darts.replay import format_comparison_table, replay
+    from madu_darts.replay import EchoAutodartsPipeline, MaduPipeline, format_comparison_table, replay
 
-    rows = replay(args.recording)
+    if args.pipeline == "echo":
+        pipeline = EchoAutodartsPipeline()
+    else:
+        offsets = None
+        if args.rotate_offsets:
+            parts = [int(p) for p in str(args.rotate_offsets).split(",") if p.strip()]
+            offsets = {slot: parts[slot] for slot in range(len(parts))}
+        pipeline = MaduPipeline(rotate_offsets=offsets)
+    rows = replay(args.recording, pipeline)
     print(format_comparison_table(rows))
     return 0
 

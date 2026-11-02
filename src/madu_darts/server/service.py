@@ -17,6 +17,7 @@ import numpy as np
 
 from madu_darts.calibration import AutoFitParams, CalibrationSession
 from madu_darts.cameras import CameraIngest, CamFrame, IngestConfig
+from madu_darts.hits import FusionConfig, Hit, HitDetector, TipConfig
 from madu_darts.motion import BoardModel, MotionConfig, MotionGate, SettledChange
 
 log = logging.getLogger(__name__)
@@ -30,9 +31,13 @@ class ServiceConfig:
     ingest: IngestConfig = field(default_factory=IngestConfig)
     autofit: AutoFitParams | None = None
     motion: MotionConfig = field(default_factory=MotionConfig)
+    tip: TipConfig = field(default_factory=TipConfig)
+    fusion: FusionConfig = field(default_factory=FusionConfig)
     first_frame_timeout_s: float = 3.0
     stream_fps: float = 10.0
     jpeg_quality: int = 80
+    #: Keep at most this many recent Hits for the debug endpoint (Turn logic is ticket 10).
+    max_hits: int = 50
 
 
 class FramePump(threading.Thread):
@@ -107,6 +112,15 @@ class DetectionService:
         self.session = session or CalibrationSession(slots, params=self._config.autofit)
         self.board_model = BoardModel(slots)
         self.motion_gate = MotionGate(self.board_model, self._config.motion, slots=slots)
+        self.hit_detector = HitDetector(
+            self.session.board_point,
+            self.board_model,
+            slots=slots,
+            motion_scale=self._config.motion.scale,
+            tip_config=self._config.tip,
+            fusion_config=self._config.fusion,
+        )
+        self._hits: list[Hit] = []
         self._ingest: CameraIngest | None = None
         self._pump: FramePump | None = None
         self._lock = threading.RLock()
@@ -177,7 +191,16 @@ class DetectionService:
         if not self.session.accepted:
             return
         images = {slot: frame.image for slot, frame in frames.items()}
-        self.motion_gate.process_frames(images, t_mono)
+        for event in self.motion_gate.process_frames(images, t_mono):
+            image = images.get(event.slot)
+            if image is not None:
+                self.hit_detector.offer(event, image)
+        hit = self.hit_detector.poll(t_mono, latest_frames=images)
+        if hit is not None:
+            with self._lock:
+                self._hits.append(hit)
+                del self._hits[: -self._config.max_hits]
+            log.info("Hit %s (%s, %.1f mm spread)", hit.autodarts_segment_name, hit.method, hit.spread_mm)
 
     # --- frames ---
 
@@ -200,6 +223,7 @@ class DetectionService:
             return
         self.board_model.capture_all(frames)
         self.motion_gate.reset()
+        self.hit_detector.reset()
         self.motion_gate.set_enabled(True)
 
     def on_calibration_accepted(self) -> None:
@@ -209,7 +233,27 @@ class DetectionService:
     def on_calibration_reset(self) -> None:
         self.motion_gate.set_enabled(False)
         self.motion_gate.reset()
+        self.hit_detector.reset()
         self.board_model.reset()
+        self.clear_hits()
+
+    # --- hits (no Turn logic yet — ticket 10) ---
+
+    def hits(self) -> list[Hit]:
+        with self._lock:
+            return list(self._hits)
+
+    def clear_hits(self) -> None:
+        with self._lock:
+            self._hits.clear()
+
+    def hits_state(self) -> dict[str, Any]:
+        hits = self.hits()
+        return {
+            "throws": [h.to_autodarts_throw() for h in hits],
+            "hits": [h.to_api() for h in hits],
+            "pending": self.hit_detector.pending,
+        }
 
     def sync_motion_with_calibration(self) -> None:
         """Enable the gate only while Calibration is Accepted; park it otherwise."""
@@ -231,6 +275,8 @@ class DetectionService:
         """Madu ``GET /api/config`` — motion knobs + cam summary."""
         return {
             "motion": self._config.motion.to_api(),
+            "detection": self._config.tip.to_api(),
+            "fusion": self._config.fusion.to_api(),
             "cam": {
                 "fps": self._config.ingest.capture.fps,
                 "width": self._config.ingest.capture.width,

@@ -1,4 +1,4 @@
-"""Detection pipeline seam used by replay (stub until tickets 08–09 land)."""
+"""Detection pipeline seam used by replay (``EchoAutodartsPipeline`` stub + ``MaduPipeline``)."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ class HitHypothesis:
     number: int | None = None
     multiplier: int | None = None
     bed: str | None = None
+    method: str | None = None
 
 
 class Pipeline(Protocol):

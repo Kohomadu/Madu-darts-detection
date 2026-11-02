@@ -146,10 +146,17 @@ def test_motion_config_and_state_endpoints() -> None:
         assert cfg["motion"]["threshold"] == 16
         assert cfg["motion"]["kernel"] == 3
 
+        assert cfg["detection"]["kernel"] == 5 and cfg["detection"]["threshold"] == 16
+        assert cfg["fusion"]["agreeMm"] == 15.0
+
         motion = client.get("/api/state/motion").json()
         assert motion["enabled"] is False
         assert set(motion["cams"]) == {"0", "1", "2"}
         assert motion["cams"]["0"]["phase"] == "idle"
+
+        hits = client.get("/api/state/hits").json()
+        assert hits == {"throws": [], "hits": [], "pending": False}
+        assert client.post("/api/state/hits/clear").json()["throws"] == []
 
         for slot, cam in CAMS.items():
             for _ in range(cam.correct_offset):

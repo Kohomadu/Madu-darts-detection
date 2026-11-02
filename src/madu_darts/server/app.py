@@ -103,6 +103,15 @@ def create_app(service: DetectionService) -> FastAPI:
     def motion_state() -> dict[str, Any]:
         return service.motion_state()
 
+    @app.get("/api/state/hits")
+    def hits_state() -> dict[str, Any]:
+        return service.hits_state()
+
+    @app.post("/api/state/hits/clear")
+    def clear_hits() -> dict[str, Any]:
+        service.clear_hits()
+        return service.hits_state()
+
     @app.get("/api/config")
     def api_config() -> dict[str, Any]:
         return service.api_config()

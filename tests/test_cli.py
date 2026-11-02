@@ -56,6 +56,9 @@ def test_record_and_replay_subcommands_parse() -> None:
     rep = build_parser().parse_args(["replay", "recordings/session"])
     assert rep.command == "replay"
     assert str(rep.recording).replace("\\", "/").endswith("recordings/session")
+    assert rep.pipeline == "madu" and rep.rotate_offsets is None
+    pinned = build_parser().parse_args(["replay", "s", "--pipeline", "echo", "--rotate-offsets", "10,4,16"])
+    assert pinned.pipeline == "echo" and pinned.rotate_offsets == "10,4,16"
 
 
 def test_bad_override_and_location_count_are_rejected() -> None:
