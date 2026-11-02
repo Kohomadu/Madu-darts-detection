@@ -223,7 +223,18 @@ def test_snapshot_is_json_shaped() -> None:
     assert snap["accepted"] is False
     assert snap["canAccept"] is False
     assert snap["blockers"] == ["cam 1: blank"]
-    assert snap["cams"]["0"] == {"status": "pass", "rotateOffset": 1, "rmsMm": 0.5, "error": None, "hasFit": True}
+    assert snap["cams"]["0"] == {
+        "status": "pass",
+        "rotateOffset": 1,
+        "rmsMm": 0.5,
+        "nInliers": None,
+        "nPoints": None,
+        "coverage": None,
+        "rmsDoubleMm": None,
+        "rmsTrebleMm": None,
+        "error": None,
+        "hasFit": True,
+    }
     assert snap["cams"]["1"]["status"] == "none" and snap["cams"]["1"]["error"] == "blank"
     assert snap["cams"]["2"]["status"] == "warn"
     assert session.to_autodarts_ellipses() == {}  # fakes carry no rings

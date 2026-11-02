@@ -25,6 +25,7 @@ from madu_darts.motion import BoardModel, SettledChange
 log = logging.getLogger(__name__)
 
 BoardPointFn = Callable[[int, tuple[float, float]], Any]
+FitOkFn = Callable[[], dict[int, bool]]
 
 
 @dataclass
@@ -51,6 +52,7 @@ class HitDetector:
         tip_config: TipConfig | None = None,
         fusion_config: FusionConfig | None = None,
         tip_directions: dict[int, tuple[float, float]] | None = None,
+        fit_ok: FitOkFn | None = None,
     ) -> None:
         self._board_point = board_point
         self._board = board_model
@@ -59,6 +61,7 @@ class HitDetector:
         self.tip_config = tip_config or TipConfig()
         self.fusion_config = fusion_config or FusionConfig()
         self._tip_dirs = tip_directions or {}
+        self._fit_ok = fit_ok
         self._pending: _Pending | None = None
         self.last_candidates: dict[int, TipCandidate] = {}
 
@@ -147,7 +150,13 @@ class HitDetector:
             return None
         self._pending = None
 
-        fused = fuse_points(pending.points_mm, {s: c.confidence for s, c in pending.candidates.items()}, self.fusion_config)
+        fit_ok = self._fit_ok() if self._fit_ok is not None else None
+        fused = fuse_points(
+            pending.points_mm,
+            {s: c.confidence for s, c in pending.candidates.items()},
+            self.fusion_config,
+            fit_ok=fit_ok,
+        )
         # Fold the settled frames into the background regardless, so a missed
         # dart does not pollute the next diff.
         for slot, frame in pending.frames.items():

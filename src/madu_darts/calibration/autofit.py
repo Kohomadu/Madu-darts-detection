@@ -33,7 +33,8 @@ from madu_darts.calibration.homography import (
     rings_from_homography,
     wire_angles_deg,
 )
-from madu_darts.calibration.model import SECTORS, CamCalibration, Ellipse
+from madu_darts.calibration.model import PASS_RMS_MM, SECTORS, CamCalibration, Ellipse
+from madu_darts.calibration.refine import RefineParams, apply_quality, refine_homography
 
 _DOUBLE_MID_MM = (DOUBLE_INNER_MM + DOUBLE_OUTER_MM) / 2.0  # 166.0
 _TREBLE_MID_MM = (TREBLE_INNER_MM + TREBLE_OUTER_MM) / 2.0  # 103.4
@@ -74,6 +75,9 @@ class AutoFitParams:
     max_wire_match_deg: float = 12.0
     ransac_threshold_mm: float = 3.0
     min_inliers: int = 28
+    #: Ticket 15: edge-refine the colour-seeded H (disable for pure colour tests).
+    refine: bool = True
+    refine_iters: int = 3
 
 
 @dataclass(frozen=True)
@@ -239,6 +243,12 @@ def _bull_inside_ellipse(ellipse: Ellipse, bull: tuple[float, float], max_norm: 
 
 
 def _rings_from_outer_ellipse(outer: Ellipse, bull: tuple[float, float] | None = None) -> DetectedRings:
+    """Outer ellipse + WDF-scaled rings. Treble is concentric here on purpose:
+
+    A provisional H that labels outer-ellipse samples with screen angles is
+    wrong under tilt (screen angle ≠ board angle). Edge refinement after the
+    colour seed (ticket 15) is what places the treble correctly.
+    """
     origin = bull if bull is not None else (outer.cx, outer.cy)
     if bull is not None and not _bull_inside_ellipse(outer, bull, max_norm=0.75):
         raise AutoFitError("outer envelope does not surround the bull; ring detection inconsistent")
@@ -957,10 +967,83 @@ def suggest(image: np.ndarray, slot: int = 0, params: AutoFitParams | None = Non
             raise AutoFitError(f"only 0 of {2 * SECTORS} wire points fit the Board plane")
 
     _, rms, homography, inliers, px, mm = best
-    return CamCalibration(
+    cal = CamCalibration(
         slot=slot,
         homography=homography,
         rotate_offset=0,
         rings=rings_from_homography(homography),
         rms_mm=rms,
+        n_inliers=int(inliers.sum()),
+        n_points=int(len(px)),
     )
+
+    if not p.refine:
+        return cal
+
+    # Ticket 15: only edge-refine when the colour seed is soft (few inliers /
+    # high RMS). A healthy colour bind (cam1/2, synthetic, 07 recording) is kept
+    # and only re-scored against measured edges so the badge stays honest.
+    from madu_darts.calibration.refine import evaluate_fit, measure_board_edges
+
+    refine_params = RefineParams(
+        max_iters=p.refine_iters,
+        ransac_threshold_mm=min(p.ransac_threshold_mm, 2.5),
+        min_inliers=max(24, p.min_inliers),
+    )
+    seed_px, seed_mm = measure_board_edges(image, homography, refine_params)
+    seed_edge = (
+        evaluate_fit(homography, seed_px, seed_mm, ransac_threshold_mm=refine_params.ransac_threshold_mm)
+        if len(seed_px)
+        else None
+    )
+
+    colour_inliers = cal.n_inliers or 0
+    colour_weak = colour_inliers < 28 or (cal.rms_mm is not None and cal.rms_mm > PASS_RMS_MM)
+    if not colour_weak:
+        return apply_quality(cal, seed_edge) if seed_edge and seed_edge.n_inliers else cal
+
+    refined_h, quality = refine_homography(image, homography, refine_params)
+    if quality.n_inliers < 16:
+        return apply_quality(cal, seed_edge) if seed_edge and seed_edge.n_inliers else cal
+    # Take refinement when it clearly binds more of the Board than the soft seed.
+    if seed_edge and quality.n_inliers < seed_edge.n_inliers and quality.rms_mm > seed_edge.rms_mm:
+        return apply_quality(
+            CamCalibration(slot=slot, homography=homography, rotate_offset=0, rms_mm=seed_edge.rms_mm),
+            seed_edge,
+        )
+    return apply_quality(
+        CamCalibration(slot=slot, homography=refined_h, rotate_offset=0, rms_mm=quality.rms_mm),
+        quality,
+    )
+
+
+def suggest_best(
+    images: list[np.ndarray],
+    slot: int = 0,
+    params: AutoFitParams | None = None,
+) -> CamCalibration:
+    """Run ``suggest`` on several frames; keep the best by coverage then RMS.
+
+    Multi-frame Auto (ticket 15): a single noisy frame no longer decides the bind.
+    """
+    if not images:
+        raise AutoFitError("no frames to auto-fit")
+    best: CamCalibration | None = None
+    best_score = float("-inf")
+    last_error: str | None = None
+    for image in images:
+        try:
+            cal = suggest(image, slot=slot, params=params)
+        except AutoFitError as exc:
+            last_error = exc.reason
+            continue
+        coverage = cal.coverage if cal.coverage is not None else 0.0
+        n_in = cal.n_inliers or 0
+        rms = cal.rms_mm if cal.rms_mm is not None else 99.0
+        score = n_in * 1000 + coverage * 100 - rms
+        if score > best_score:
+            best_score = score
+            best = cal
+    if best is None:
+        raise AutoFitError(last_error or "no frame bound the Board plane")
+    return best

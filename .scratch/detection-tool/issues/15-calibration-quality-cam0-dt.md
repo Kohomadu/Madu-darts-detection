@@ -1,7 +1,9 @@
-Status: needs-triage
+Status: claimed
 Type: task
 Model: premium
 Blocked by: 04, 13
+
+<!-- Live Auto+Accept still needed before Status: resolved -->
 
 # Calibration quality: cam0 RMS / wire fit → doubles & trebles wrong
 
@@ -50,3 +52,42 @@ Use live captures under `GET /api/captures` from this session (e.g. `20261102T13
 - On this Board, after Auto + Accept, cam0 status **pass** with RMS comparable to cam1/cam2 (target ≲ 1.2 mm) for typical lighting, or a documented hardware/FOV limit with a fusion workaround that still scores D/T reliably.
 - Live or labelled set: doubles/trebles agreement materially up vs this session (session had ~1 confirmed T20 and multiple near-wire S/M mis-beds).
 - Answer records root cause (fit bug vs glare vs geometry vs mount) and what changed.
+
+## Answer
+
+### Root cause
+
+Not mount geometry and not primarily tip localization. **Colour autofit was reporting a soft cam0 bind as almost-OK.**
+
+On live empty-Board frames (2026-11-02):
+
+| Cam | Reported RMS | Colour-wire inliers | What happened |
+|-----|-------------:|--------------------:|---------------|
+| 0 | 2.18 warn | **15/40** | Warm mask flooded by LED surround / wood / glare → outer-envelope fallback. Treble rings were **WDF-scaled concentric** with the double ellipse; under perspective the bull sits ~57 px above that ellipse centre, so all 20 treble wire points landed tens of mm off and were RANSAC-rejected. Homography = double-only extrapolation → radial D/T flips. |
+| 1 | 0.90 pass | 29/40 | Treble tight; far-side double ellipse slightly large (RANSAC drops those points). |
+| 2 | 0.87 pass | 30/40 | Same pattern as cam1. |
+
+RMS was computed **on inliers only**, so the badge could not see that cam0’s treble band was unbound.
+
+### What changed
+
+1. **Edge refine** (`calibration/refine.py`): after a soft colour seed (`< 28` colour inliers or RMS > 1.5), re-measure ring/wire edges along Board-plane rays (colour-gated) and RANSAC+LS refit. Healthy colour seeds (cam1/2, synthetic, 07 recording) are kept and only re-scored.
+2. **Honest quality** on `CamCalibration`: `nInliers` / `nPoints` / per-band RMS; pass needs RMS ≤ 1.5 **and** enough edge inliers (not a thin colour subset). Badge shows `PASS 1.38 mm 174/321`.
+3. **Multi-frame Auto**: `recalibrate` grabs ~5 frames; `suggest_best` keeps the strongest.
+4. **Fusion guard**: when `prefer_pass_cams` and a cam is not `pass`, drop it if two pass cams already agree → `Cam+1`. `UnanimousCam` only with healthy cams.
+5. **`madu-darts calib-diag <dir>`** for residual tables + overlays.
+
+### Before / after on this Board’s empty frames
+
+| Cam | Before | After (`calib-diag captures/live/_now`) |
+|-----|--------|----------------------------------------|
+| 0 | warn 2.18 (15/40 colour) | **pass 1.38 (174/321 edges; dbl 1.41 / trb 1.41)** |
+| 1 | pass 0.90 | warn 1.50 (225/350) — colour H kept; edge-honest badge |
+| 2 | pass 0.87 | **pass 1.48 (227/356)** |
+
+Cam0 now binds **both** bands. Absolute RMS is a bit above the ≲ 1.2 stretch target but well inside pass, and the fusion guard covers residual soft cams.
+
+### Verification
+
+- Full suite **289 passed** (incl. 07-recording replay floor ≥ 20/24 and new refine/fusion tests).
+- Live Auto + Accept + D/T throws: **pending** operator pull/restart on the Board (see Comments).

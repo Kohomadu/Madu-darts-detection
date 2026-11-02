@@ -64,7 +64,10 @@ def _twenty_wedge_mm(r_in: float = OUTER_BULL_RADIUS_MM, r_out: float = DOUBLE_O
 def _status_text(cal: CamCalibration) -> str:
     if cal.rms_mm is None:
         return cal.status.value.upper()
-    return f"{cal.status.value.upper()}  {cal.rms_mm:.2f} mm"
+    text = f"{cal.status.value.upper()}  {cal.rms_mm:.2f} mm"
+    if cal.n_inliers is not None and cal.n_points is not None:
+        text += f"  {cal.n_inliers}/{cal.n_points}"
+    return text
 
 
 def _put_badge(image: np.ndarray, text: str, colour: tuple[int, int, int]) -> None:

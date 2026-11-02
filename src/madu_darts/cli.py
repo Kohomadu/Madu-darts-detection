@@ -111,6 +111,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="pin rotate-20 per cam as 'o0,o1,o2' instead of resolving from labels",
     )
     replay.add_argument("--log-level", default="info")
+
+    diag = sub.add_parser(
+        "calib-diag",
+        help="diagnose autofit quality on empty-Board frame(s) (ticket 15)",
+    )
+    diag.add_argument(
+        "path",
+        type=Path,
+        help="BGR image, a directory of cam{0,1,2}.jpg, or a live capture pack (0.jpg…)",
+    )
+    diag.add_argument("--slot", type=int, default=None, help="single cam slot when PATH is one image")
+    diag.add_argument("--out", type=Path, default=None, help="directory for overlay JPEGs (optional)")
+    diag.add_argument("--log-level", default="info")
     return parser
 
 
@@ -187,6 +200,63 @@ def _cmd_replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_diag_frames(path: Path, slot: int | None) -> list[tuple[int, Path]]:
+    """Return ``(slot, image_path)`` pairs for calib-diag."""
+    path = Path(path)
+    if path.is_file():
+        return [(0 if slot is None else int(slot), path)]
+    if not path.is_dir():
+        raise SystemExit(f"not a file or directory: {path}")
+    found: list[tuple[int, Path]] = []
+    for s in (0, 1, 2):
+        for name in (f"cam{s}.jpg", f"{s}.jpg"):
+            candidate = path / name
+            if candidate.is_file():
+                found.append((s, candidate))
+                break
+    if not found:
+        raise SystemExit(f"no cam{{0,1,2}}.jpg or {{0,1,2}}.jpg under {path}")
+    if slot is not None:
+        found = [(s, p) for s, p in found if s == int(slot)]
+        if not found:
+            raise SystemExit(f"no frame for slot {slot} under {path}")
+    return found
+
+
+def _cmd_calib_diag(args: argparse.Namespace) -> int:
+    import cv2
+
+    from madu_darts.calibration import AutoFitError, suggest
+    from madu_darts.calibration.overlay import draw_spiderweb, draw_warped_board
+
+    pairs = _resolve_diag_frames(args.path, args.slot)
+    out_dir = Path(args.out) if args.out else None
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    print(f"{'cam':>3}  {'status':<6}  {'rms':>6}  {'inliers':>9}  {'cov':>5}  {'dbl':>6}  {'trb':>6}")
+    for slot, image_path in pairs:
+        image = cv2.imread(str(image_path))
+        if image is None:
+            print(f"{slot:3d}  FAIL   could not read {image_path}")
+            continue
+        try:
+            cal = suggest(image, slot=slot)
+        except AutoFitError as exc:
+            print(f"{slot:3d}  none   {exc.reason}")
+            continue
+        cov = "" if cal.coverage is None else f"{cal.coverage:5.3f}"
+        dbl = "" if cal.rms_double_mm is None else f"{cal.rms_double_mm:6.3f}"
+        trb = "" if cal.rms_treble_mm is None else f"{cal.rms_treble_mm:6.3f}"
+        inl = "" if cal.n_inliers is None or cal.n_points is None else f"{cal.n_inliers}/{cal.n_points}"
+        print(
+            f"{slot:3d}  {cal.status.value:<6}  {cal.rms_mm:6.3f}  {inl:>9}  {cov:>5}  {dbl:>6}  {trb:>6}"
+        )
+        if out_dir is not None:
+            cv2.imwrite(str(out_dir / f"feed{slot}.jpg"), draw_spiderweb(image, cal))
+            cv2.imwrite(str(out_dir / f"warped{slot}.jpg"), draw_warped_board(image, cal))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=args.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -219,6 +289,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_record(args)
     if args.command == "replay":
         return _cmd_replay(args)
+    if args.command == "calib-diag":
+        return _cmd_calib_diag(args)
     return 2
 
 

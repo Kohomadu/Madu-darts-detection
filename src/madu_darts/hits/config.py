@@ -59,6 +59,8 @@ class FusionConfig:
     #: 170 mm; ~200 leaves a little room for tip noise / just-outside misses, and kills
     #: arm/body false Hits at r ≫ 300 (ticket 14).
     max_hit_radius_mm: float = 200.0
+    #: Ticket 15: when True, a non-pass cam is dropped if two pass cams already agree.
+    prefer_pass_cams: bool = True
 
     def to_api(self) -> dict[str, Any]:
         return {
@@ -66,6 +68,7 @@ class FusionConfig:
             "collectWindowS": self.collect_window_s,
             "minCams": self.min_cams,
             "maxHitRadiusMm": self.max_hit_radius_mm,
+            "preferPassCams": self.prefer_pass_cams,
         }
 
 

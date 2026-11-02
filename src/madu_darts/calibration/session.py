@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from madu_darts.calibration.autofit import AutoFitError, AutoFitParams, suggest
+from madu_darts.calibration.autofit import AutoFitError, AutoFitParams, suggest, suggest_best
 from madu_darts.calibration.homography import image_to_board_mm
 from madu_darts.calibration.model import CalibrationNotAccepted, CamCalibration, FitStatus
 from madu_darts.calibration.mount import load_rotate_offsets, save_rotate_offsets
@@ -99,15 +99,25 @@ class CalibrationSession:
 
     # --- mutate (any change to a cam revokes Accept) ---
 
-    def suggest(self, slot: int, image: np.ndarray) -> CamCalibration:
+    def suggest(self, slot: int, image: np.ndarray | list[np.ndarray]) -> CamCalibration:
         """Run auto-fit for one cam; a failure leaves the cam at ``none`` with a reason.
 
+        ``image`` may be a single frame or a short list (multi-frame Auto, ticket 15).
         On success, applies the mount / last-Accepted ``rotate_offset`` for this slot
         so ring cams land on physical 20 without arrow presses (ticket 13).
         """
         slot = self._check(slot)
         try:
-            cal = self._suggester(image, slot, self._params)
+            if isinstance(image, list):
+                if not image:
+                    raise AutoFitError("no frame from camera")
+                if len(image) == 1:
+                    cal = self._suggester(image[0], slot, self._params)
+                else:
+                    # Multi-frame path always uses the real suggester chain (incl. refine).
+                    cal = suggest_best(image, slot=slot, params=self._params)
+            else:
+                cal = self._suggester(image, slot, self._params)
             error: str | None = None
             offset = int(self._rotate_offsets.get(slot, 0)) % 20
             if cal.has_fit and offset:
@@ -121,12 +131,15 @@ class CalibrationSession:
             self._accepted = False
         return cal
 
-    def suggest_all(self, frames: Mapping[int, np.ndarray]) -> dict[int, CamCalibration]:
+    def suggest_all(
+        self,
+        frames: Mapping[int, np.ndarray] | Mapping[int, list[np.ndarray]],
+    ) -> dict[int, CamCalibration]:
         """Auto-fit every slot that has a frame; slots without a frame become ``none``."""
         result: dict[int, CamCalibration] = {}
         for slot in self._slots:
             image = frames.get(slot)
-            if image is None:
+            if image is None or (isinstance(image, list) and not image):
                 result[slot] = self.clear(slot, "no frame from camera")
             else:
                 result[slot] = self.suggest(slot, image)
@@ -206,6 +219,11 @@ class CalibrationSession:
                     "status": cal.status.value,
                     "rotateOffset": cal.rotate_offset,
                     "rmsMm": cal.rms_mm,
+                    "nInliers": cal.n_inliers,
+                    "nPoints": cal.n_points,
+                    "coverage": None if cal.coverage is None else round(cal.coverage, 3),
+                    "rmsDoubleMm": cal.rms_double_mm,
+                    "rmsTrebleMm": cal.rms_treble_mm,
                     "error": self._errors[slot],
                     "hasFit": cal.has_fit,
                 }

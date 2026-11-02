@@ -94,6 +94,25 @@ def test_fuse_unanimous_majority_single() -> None:
     assert one is not None and one.method == SINGLE and one.spread_mm == 0.0
 
 
+def test_fuse_drops_warn_cam_when_two_pass_cams_agree() -> None:
+    """Ticket 15: soft Calibration must not veto a tight Cam+1 pair."""
+    cfg = FusionConfig(agree_mm=15.0, prefer_pass_cams=True)
+    # Cams 1+2 agree on T20; cam0 (warn) pulls several mm out.
+    points = {0: (8.0, 112.0), 1: (0.0, 103.0), 2: (1.0, 104.0)}
+    fused = fuse_points(points, config=cfg, fit_ok={0: False, 1: True, 2: True})
+    assert fused is not None
+    assert fused.method == MAJORITY
+    assert fused.used_slots == (1, 2)
+    assert fused.dropped_slots == (0,)
+    # When all three are healthy and agree → UnanimousCam unchanged.
+    tight = {0: (0.0, 103.0), 1: (1.0, 104.0), 2: (-1.0, 102.5)}
+    uni = fuse_points(tight, config=cfg, fit_ok={0: True, 1: True, 2: True})
+    assert uni is not None and uni.method == UNANIMOUS and uni.used_slots == (0, 1, 2)
+    # Without fit_ok, legacy behaviour keeps the soft third cam when all agree loosely.
+    loose = fuse_points(points, config=cfg, fit_ok=None)
+    assert loose is not None and 0 in loose.used_slots
+
+
 def test_fuse_rejects_off_board_arm_tips() -> None:
     """Ticket 14: tips at r ≫ double-outer must not become BestCam Hits."""
     cfg = FusionConfig(agree_mm=15.0, max_hit_radius_mm=200.0)

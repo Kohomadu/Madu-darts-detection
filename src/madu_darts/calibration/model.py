@@ -27,6 +27,13 @@ SECTOR_STEP_DEG = 360.0 / SECTORS  # 18°
 # Reprojection RMS (mm) thresholds for the warped-board pass/fail badge.
 PASS_RMS_MM = 1.5
 WARN_RMS_MM = 3.0
+# Ticket 15: a low inlier-only RMS is not enough — enough real edges must bind.
+# Coverage is inliers/measured-peaks (false peaks from glare lower it); absolute
+# inlier count is the stronger signal that both bands are actually observed.
+PASS_MIN_COVERAGE = 0.45
+PASS_MIN_INLIERS = 100
+WARN_MIN_COVERAGE = 0.30
+WARN_MIN_INLIERS = 40
 
 
 class FitStatus(str, Enum):
@@ -38,15 +45,46 @@ class FitStatus(str, Enum):
     FAIL = "fail"
 
 
-def status_for_rms(rms_mm: float | None) -> FitStatus:
-    """Classify a reprojection RMS; ``None`` means no fit at all."""
+def status_for_rms(
+    rms_mm: float | None,
+    *,
+    n_inliers: int | None = None,
+    n_points: int | None = None,
+) -> FitStatus:
+    """Classify fit quality from RMS and (optional) edge-inlier coverage.
+
+    Without coverage stats this falls back to the legacy RMS-only thresholds so
+    older callers / synthetic tests keep working. With coverage (ticket 15), a
+    cam only **pass**es when RMS is low *and* enough measured edges are inliers
+    — stopping a soft cam0 (15/40 colour wires) from looking almost-green.
+    """
     if rms_mm is None:
         return FitStatus.NONE
     if not math.isfinite(rms_mm):
         return FitStatus.FAIL
-    if rms_mm <= PASS_RMS_MM:
+
+    coverage: float | None = None
+    if n_inliers is not None and n_points is not None and n_points > 0:
+        coverage = n_inliers / n_points
+
+    if coverage is None:
+        if rms_mm <= PASS_RMS_MM:
+            return FitStatus.PASS
+        if rms_mm <= WARN_RMS_MM:
+            return FitStatus.WARN
+        return FitStatus.FAIL
+
+    n_in = int(n_inliers or 0)
+    if (
+        rms_mm <= PASS_RMS_MM
+        and coverage >= PASS_MIN_COVERAGE
+        and n_in >= PASS_MIN_INLIERS
+    ):
         return FitStatus.PASS
+    if rms_mm <= WARN_RMS_MM and (coverage >= WARN_MIN_COVERAGE or n_in >= WARN_MIN_INLIERS):
+        return FitStatus.WARN
     if rms_mm <= WARN_RMS_MM:
+        # Bound the Board loosely but coverage is thin → still warn (Acceptable).
         return FitStatus.WARN
     return FitStatus.FAIL
 
@@ -133,6 +171,14 @@ class CamCalibration:
     rings: RingFit | None = None
     rms_mm: float | None = None
     """Reprojection RMS of the fit points, mm."""
+    n_inliers: int | None = None
+    """Edge correspondences within the RANSAC threshold after refinement."""
+    n_points: int | None = None
+    """Total measured ring/wire edge correspondences used for quality."""
+    rms_double_mm: float | None = None
+    """Inlier RMS on the double band alone (diagnostic)."""
+    rms_treble_mm: float | None = None
+    """Inlier RMS on the treble band alone (diagnostic)."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rotate_offset", int(self.rotate_offset) % SECTORS)
@@ -147,13 +193,19 @@ class CamCalibration:
         return self.homography is not None
 
     @property
+    def coverage(self) -> float | None:
+        if self.n_inliers is None or self.n_points is None or self.n_points <= 0:
+            return None
+        return self.n_inliers / self.n_points
+
+    @property
     def status(self) -> FitStatus:
         """``NONE`` without a fit; a fit with unknown RMS is ``WARN`` (operator judges)."""
         if self.homography is None:
             return FitStatus.NONE
         if self.rms_mm is None:
             return FitStatus.WARN
-        return status_for_rms(self.rms_mm)
+        return status_for_rms(self.rms_mm, n_inliers=self.n_inliers, n_points=self.n_points)
 
     def rotated(self, delta_sectors: int) -> CamCalibration:
         return replace(self, rotate_offset=(self.rotate_offset + delta_sectors) % SECTORS)

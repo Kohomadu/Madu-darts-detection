@@ -53,6 +53,22 @@ def test_cam_calibration_status_follows_rms() -> None:
     assert CamCalibration(slot=0, homography=np.eye(3), rms_mm=9.0).status is FitStatus.FAIL
 
 
+def test_cam_calibration_status_requires_edge_coverage_when_present() -> None:
+    """Ticket 15: low inlier-only RMS with thin coverage stays warn/fail."""
+    # Plenty of edges, tight RMS → pass.
+    assert (
+        CamCalibration(slot=0, homography=np.eye(3), rms_mm=1.0, n_inliers=120, n_points=200).status
+        is FitStatus.PASS
+    )
+    # Soft colour seed style: 15/40 inliers even with OK RMS → warn.
+    assert (
+        CamCalibration(slot=0, homography=np.eye(3), rms_mm=1.2, n_inliers=15, n_points=40).status
+        is FitStatus.WARN
+    )
+    assert status_for_rms(1.0, n_inliers=120, n_points=200) is FitStatus.PASS
+    assert status_for_rms(2.2, n_inliers=15, n_points=40) is FitStatus.WARN
+
+
 def test_cam_calibration_rejects_non_3x3_homography() -> None:
     with pytest.raises(ValueError):
         CamCalibration(slot=0, homography=np.eye(2))

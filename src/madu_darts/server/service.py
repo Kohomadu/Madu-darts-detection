@@ -133,6 +133,8 @@ class DetectionService:
         )
         self.board_model = BoardModel(slots)
         self.motion_gate = MotionGate(self.board_model, self._config.motion, slots=slots)
+        from madu_darts.calibration.model import FitStatus
+
         self.hit_detector = HitDetector(
             self.session.board_point,
             self.board_model,
@@ -140,6 +142,9 @@ class DetectionService:
             motion_scale=self._config.motion.scale,
             tip_config=self._config.tip,
             fusion_config=self._config.fusion,
+            fit_ok=lambda: {
+                s: self.session.get(s).status is FitStatus.PASS for s in self.session.slots
+            },
         )
         self.live = LiveStore(
             root=None if self._config.capture_root is None else Path(self._config.capture_root),
@@ -426,16 +431,26 @@ class DetectionService:
 
     # --- calibration ---
 
+    def _calibration_frame_packs(self, *, n: int = 5, gap_s: float = 0.05) -> dict[int, list[np.ndarray]]:
+        """Grab ``n`` latest-frame snapshots a few dozen ms apart for multi-frame Auto."""
+        packs: dict[int, list[np.ndarray]] = {s: [] for s in self.session.slots}
+        for i in range(max(1, n)):
+            if i:
+                time.sleep(gap_s)
+            for slot, image in self.latest_frames().items():
+                packs.setdefault(slot, []).append(image.copy())
+        return {s: imgs for s, imgs in packs.items() if imgs}
+
     def recalibrate(self, slot: int | None = None) -> dict[str, Any]:
-        frames = self.latest_frames()
+        packs = self._calibration_frame_packs()
         if slot is None:
-            self.session.suggest_all(frames)
+            self.session.suggest_all(packs)
         else:
-            image = frames.get(slot)
-            if image is None:
+            images = packs.get(slot)
+            if not images:
                 self.session.clear(slot, "no frame from camera")
             else:
-                self.session.suggest(slot, image)
+                self.session.suggest(slot, images)
         # Any calibration change revokes Accept (session) — park the detector.
         if not self.session.accepted:
             self.on_calibration_reset()

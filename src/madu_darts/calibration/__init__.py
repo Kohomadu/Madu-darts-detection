@@ -10,6 +10,14 @@ from madu_darts.calibration.autofit import (
     detect_wire_points,
     ray_ellipse_intersections,
     suggest,
+    suggest_best,
+)
+from madu_darts.calibration.refine import (
+    FitQuality,
+    RefineParams,
+    evaluate_fit,
+    measure_board_edges,
+    refine_homography,
 )
 from madu_darts.calibration.homography import (
     apply_homography,
@@ -79,11 +87,16 @@ __all__ = [
     "draw_spiderweb",
     "draw_warped_board",
     "effective_homography",
+    "evaluate_fit",
     "fit_homography",
+    "FitQuality",
     "image_to_board_mm",
     "load_rotate_offsets",
+    "measure_board_edges",
     "polar_mm",
     "ray_ellipse_intersections",
+    "refine_homography",
+    "RefineParams",
     "reprojection_rms_mm",
     "ring_points_mm",
     "rings_from_homography",
@@ -91,6 +104,7 @@ __all__ = [
     "save_rotate_offsets",
     "status_for_rms",
     "suggest",
+    "suggest_best",
     "wire_angles_deg",
     "wire_ring_intersections_mm",
 ]
