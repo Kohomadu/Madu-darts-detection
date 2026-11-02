@@ -30,6 +30,14 @@ class CamConfigPatch(BaseModel):
     rotate180: dict[int, bool] | None = None
 
 
+class HitOverridePatch(BaseModel):
+    """Manual Hit correction: segment label and/or Board-mm point."""
+
+    segmentName: str | None = None
+    xMm: float | None = None
+    yMm: float | None = None
+
+
 def _encode_jpeg(image: np.ndarray, quality: int) -> bytes:
     import cv2
 
@@ -154,6 +162,29 @@ def create_app(service: DetectionService) -> FastAPI:
     @app.post("/api/reset")
     def reset_turn() -> dict[str, Any]:
         return service.reset_turn()
+
+    @app.post("/api/recheck")
+    def recheck() -> dict[str, Any]:
+        """Mid-Turn classical vision Recheck (ticket 17)."""
+        if not session.accepted:
+            raise HTTPException(status_code=409, detail="calibration not accepted")
+        try:
+            return service.recheck()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.patch("/api/state/hits/{index}")
+    def override_hit(index: int, body: HitOverridePatch) -> dict[str, Any]:
+        """Manual Hit override by segmentName or xMm/yMm (ticket 18)."""
+        payload = body.model_dump(exclude_none=True)
+        try:
+            return service.override_hit(index, payload)
+        except IndexError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/config")
     def api_config() -> dict[str, Any]:

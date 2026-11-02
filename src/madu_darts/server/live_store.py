@@ -93,9 +93,12 @@ class LiveStore:
                 }
             )
             # Snapshot Hits whenever the strip content may have changed and is still on the controller.
-            if tr.event in (TurnEvent.THROW_DETECTED, TurnEvent.BOUNCE_OUT) or (
-                tr.event == TurnEvent.TAKEOUT_STARTED and hits
-            ):
+            if tr.event in (
+                TurnEvent.THROW_DETECTED,
+                TurnEvent.BOUNCE_OUT,
+                TurnEvent.RECHECK,
+                TurnEvent.OVERRIDE,
+            ) or (tr.event == TurnEvent.TAKEOUT_STARTED and hits):
                 self._open.hits = list(hits)
 
     def attach_capture(self, capture_id: str) -> None:

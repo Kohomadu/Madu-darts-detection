@@ -10,6 +10,7 @@ from madu_darts.board.geometry import (
     TREBLE_OUTER_MM,
     Segment,
     point_mm_to_segment,
+    segment_name_to_mm,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "TREBLE_OUTER_MM",
     "Segment",
     "point_mm_to_segment",
+    "segment_name_to_mm",
 ]

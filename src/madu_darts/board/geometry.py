@@ -79,6 +79,49 @@ def _sector_number(x_mm: float, y_mm: float) -> int:
     return SECTOR_CLOCKWISE[index]
 
 
+def segment_name_to_mm(name: str) -> tuple[float, float]:
+    """Representative Board-mm point for a Madu / Autodarts segment label (manual override)."""
+    key = name.strip()
+    upper = key.upper()
+    if upper in ("IB", "BULL", "50"):
+        return (0.0, 0.0)
+    if upper in ("OB", "25"):
+        return (0.0, (INNER_BULL_RADIUS_MM + OUTER_BULL_RADIUS_MM) / 2.0)
+    if upper in ("MISS", "M"):
+        return (0.0, DOUBLE_OUTER_MM + 10.0)
+
+    bed = upper[0]
+    rest = upper[1:]
+    if bed == "M" and rest.isdigit():
+        number = int(rest)
+        angle = _sector_centre_deg(number)
+        rad = math.radians(angle)
+        r = DOUBLE_OUTER_MM + 8.0
+        return (r * math.sin(rad), r * math.cos(rad))
+    if bed in ("T", "D", "S") and rest.isdigit():
+        number = int(rest)
+    else:
+        raise ValueError(f"unknown segment name {name!r}")
+
+    angle = _sector_centre_deg(number)
+    rad = math.radians(angle)
+    if bed == "T":
+        r = (TREBLE_INNER_MM + TREBLE_OUTER_MM) / 2.0
+    elif bed == "D":
+        r = (DOUBLE_INNER_MM + DOUBLE_OUTER_MM) / 2.0
+    else:  # single — prefer outer single mid
+        r = (TREBLE_OUTER_MM + DOUBLE_INNER_MM) / 2.0
+    return (r * math.sin(rad), r * math.cos(rad))
+
+
+def _sector_centre_deg(number: int) -> float:
+    try:
+        index = SECTOR_CLOCKWISE.index(int(number))
+    except ValueError as exc:
+        raise ValueError(f"unknown sector number {number}") from exc
+    return float(index * 18.0)
+
+
 def point_mm_to_segment(x_mm: float, y_mm: float) -> Segment:
     """Map a board-plane tip position in millimetres to a Segment.
 

@@ -133,6 +133,11 @@ class TurnController:
         with self._lock:
             return tuple(c.hit for c in self._committed)
 
+    def empty_refs(self) -> dict[int, np.ndarray]:
+        """Copy of Accept/Start empty-Board frames (ticket 17 Recheck)."""
+        with self._lock:
+            return {s: f.copy() for s, f in self._empty_refs.items()}
+
     @property
     def standby(self) -> bool:
         return self._standby
@@ -515,6 +520,43 @@ class TurnController:
         self._set(self._status, TurnEvent.WAKEUP, t)
 
     # --- helpers ---
+
+    def replace_hits(self, hits: list[Hit], frames: dict[int, np.ndarray], t_mono: float) -> TurnTransition:
+        """Replace committed Hits after a vision Recheck (ticket 17); refresh BoardModel."""
+        with self._lock:
+            if not self._running:
+                raise RuntimeError("detection not running")
+            if not self._committed:
+                raise RuntimeError("no Hits to recheck")
+            if not hits:
+                raise RuntimeError("recheck produced no Hits")
+            if len(hits) > self.config.max_hits:
+                hits = hits[: self.config.max_hits]
+            # Keep bounce-out footprints empty — Recheck commits the whole Board as current.
+            new_committed: list[_Committed] = []
+            for hit in hits:
+                new_committed.append(
+                    _Committed(hit=hit, before={s: frames[s].copy() for s in frames if s in self._slots}, footprints={})
+                )
+            self._committed = new_committed
+            self._offered.clear()
+            self.detector.reset()
+            for slot, frame in frames.items():
+                if slot in self._slots:
+                    self.board.commit(slot, frame)
+            status = TurnStatus.TAKEOUT if len(self._committed) >= self.config.max_hits else TurnStatus.THROW
+            return self._set(status, TurnEvent.RECHECK, t_mono)
+
+    def override_hit(self, index: int, hit: Hit, t_mono: float) -> TurnTransition:
+        """Replace one committed Hit with a manual correction (ticket 18)."""
+        with self._lock:
+            if not self._committed:
+                raise RuntimeError("no Hits to override")
+            if index < 0 or index >= len(self._committed):
+                raise IndexError(f"hit index {index} out of range")
+            old = self._committed[index]
+            self._committed[index] = _Committed(hit=hit, before=old.before, footprints=old.footprints)
+            return self._set(self._status, TurnEvent.OVERRIDE, t_mono)
 
     def _clear_turn(self) -> None:
         self._committed.clear()

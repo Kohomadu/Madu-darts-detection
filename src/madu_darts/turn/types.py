@@ -31,6 +31,8 @@ class TurnEvent(str, Enum):
     BOUNCE_OUT = "bounceOut"
     STANDBY = "standby"
     WAKEUP = "wakeup"
+    RECHECK = "recheck"
+    OVERRIDE = "override"
 
 
 @dataclass(frozen=True)

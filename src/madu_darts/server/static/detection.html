@@ -54,6 +54,13 @@
   .hist-row .segs { font-weight:700; letter-spacing:.02em; }
   .hist-row a { color:var(--accent); font-size:12px; }
   .hist-actions { display:flex; gap:8px; margin-bottom:8px; align-items:center; }
+  .hit.filled { cursor:pointer; }
+  .hit.selected { outline:2px solid var(--accent); outline-offset:1px; }
+  .picker { margin-top:10px; display:none; gap:8px; flex-wrap:wrap; align-items:center; }
+  .picker.open { display:flex; }
+  .picker input { width:72px; background:#0f1114; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+  .picker .hint { color:var(--muted); font-size:12px; width:100%; }
+  svg#board.pick-mode { cursor:crosshair; outline:1px dashed var(--accent); }
 </style>
 </head>
 <body>
@@ -66,6 +73,7 @@
     <a class="btn" href="/" id="calibrate">Calibrate</a>
     <button id="toggle" class="primary" title="Start/Stop detection. Start takes the current Board as empty.">Start</button>
     <button id="reset" class="danger" title="Clear the Turn and take the current Board as empty (keeps Calibration).">Reset</button>
+    <button id="recheck" title="Re-analyse stuck darts vs empty Board refs (mid-Turn only).">Recheck</button>
     <button id="capture" title="Freeze cam frames + state into /api/captures (also auto-fires on the 3rd Hit).">Capture</button>
   </nav>
 </header>
@@ -79,6 +87,12 @@
     <section class="panel">
       <h2>Turn</h2>
       <div class="strip" id="strip"></div>
+      <div class="picker" id="picker">
+        <span class="hint">Override dart <b id="pick-idx">1</b> — type a segment (D20, T5, S18, Bull, 25) or click the Board. Recheck may overwrite this.</span>
+        <input id="pick-seg" type="text" placeholder="D20" maxlength="8" autocomplete="off">
+        <button type="button" id="pick-ok" class="primary">OK</button>
+        <button type="button" id="pick-cancel">Cancel</button>
+      </div>
       <div id="warn"></div>
     </section>
     <section class="panel">
@@ -147,6 +161,24 @@
   const logLines = [];
   let lastKey = '';
   let lastHistoryCount = -1;
+  let pickIndex = null;
+
+  function closePicker() {
+    pickIndex = null;
+    $('#picker').classList.remove('open');
+    $('#board').classList.remove('pick-mode');
+    $('#pick-seg').value = '';
+    document.querySelectorAll('.hit.selected').forEach(el => el.classList.remove('selected'));
+  }
+
+  function openPicker(index) {
+    pickIndex = index;
+    $('#pick-idx').textContent = String(index + 1);
+    $('#picker').classList.add('open');
+    $('#board').classList.add('pick-mode');
+    document.querySelectorAll('.hit').forEach((el, i) => el.classList.toggle('selected', i === index));
+    $('#pick-seg').focus();
+  }
 
   async function loadHistory() {
     try {
@@ -190,15 +222,22 @@
     $('#toggle').className = running ? '' : 'primary';
     $('#toggle').disabled = !accepted;
     $('#reset').disabled = !accepted;
+    const nHits = (st.throws || []).length;
+    $('#recheck').disabled = !(accepted && running && nHits >= 1 && nHits <= 3);
     $('#warn').textContent = !accepted ? 'Calibration not accepted — go to Calibrate first.' : (st.cameras && st.cameras.error ? `Camera error: ${st.cameras.error}` : '');
 
     const throws = st.throws || [];
+    if (pickIndex != null && pickIndex >= throws.length) closePicker();
     const strip = $('#strip'); strip.innerHTML = '';
     for (let i = 0; i < 3; i++) {
       const t = throws[i];
       const d = document.createElement('div');
-      d.className = `hit ${t ? 'filled' : 'empty'}`;
+      d.className = `hit ${t ? 'filled' : 'empty'}${pickIndex === i ? ' selected' : ''}`;
       d.innerHTML = t ? `<b>${t.segmentName}</b><small>${t.bed} · ${t.method}</small>` : `<b>—</b><small>dart ${i + 1}</small>`;
+      if (t) {
+        d.title = 'Click to override this Hit';
+        d.onclick = () => { if (pickIndex === i) closePicker(); else openPicker(i); };
+      }
       strip.appendChild(d);
     }
     dots.innerHTML = '';
@@ -250,7 +289,15 @@
     try { await api('PUT', state && state.running ? '/api/stop' : '/api/start'); render(await api('GET', '/api/state')); }
     catch (e) { $('#warn').textContent = e.message; }
   };
-  $('#reset').onclick = async () => { try { await api('POST', '/api/reset'); render(await api('GET', '/api/state')); await loadHistory(); } catch (e) { $('#warn').textContent = e.message; } };
+  $('#reset').onclick = async () => { try { closePicker(); await api('POST', '/api/reset'); render(await api('GET', '/api/state')); await loadHistory(); } catch (e) { $('#warn').textContent = e.message; } };
+  $('#recheck').onclick = async () => {
+    try {
+      closePicker();
+      render(await api('POST', '/api/recheck'));
+      $('#warn').textContent = 'Recheck done';
+      await loadHistory();
+    } catch (e) { $('#warn').textContent = e.message; }
+  };
   $('#capture').onclick = async () => {
     try {
       const pack = await api('POST', '/api/capture');
@@ -258,6 +305,37 @@
       await loadHistory();
     } catch (e) { $('#warn').textContent = e.message; }
   };
+  $('#pick-cancel').onclick = () => closePicker();
+  $('#pick-ok').onclick = async () => {
+    if (pickIndex == null) return;
+    const seg = $('#pick-seg').value.trim();
+    if (!seg) { $('#warn').textContent = 'Enter a segment name (e.g. D20)'; return; }
+    try {
+      const idx = pickIndex;
+      closePicker();
+      render(await api('PATCH', `/api/state/hits/${idx}`, { segmentName: seg }));
+      $('#warn').textContent = `Overrode dart ${idx + 1} → ${seg}`;
+    } catch (e) { $('#warn').textContent = e.message; }
+  };
+  $('#pick-seg').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); $('#pick-ok').click(); } });
+  $('#board').addEventListener('click', async (ev) => {
+    if (pickIndex == null) return;
+    const svg = $('#board');
+    const pt = svg.createSVGPoint();
+    pt.x = ev.clientX; pt.y = ev.clientY;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const local = pt.matrixTransform(ctm.inverse());
+    // SVG y is screen-down; Board y is up — flip to match Autodarts coords on the face.
+    const xMm = (local.x / R.do) * 170;
+    const yMm = (-local.y / R.do) * 170;
+    try {
+      const idx = pickIndex;
+      closePicker();
+      render(await api('PATCH', `/api/state/hits/${idx}`, { xMm, yMm }));
+      $('#warn').textContent = `Overrode dart ${idx + 1} at Board (${xMm.toFixed(1)}, ${yMm.toFixed(1)}) mm`;
+    } catch (e) { $('#warn').textContent = e.message; }
+  });
   $('#hist-refresh').onclick = () => loadHistory();
   $('#hist-clear').onclick = async () => { try { await api('POST', '/api/history/clear'); await loadHistory(); render(await api('GET', '/api/state')); } catch (e) { $('#warn').textContent = e.message; } };
 

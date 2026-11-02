@@ -303,7 +303,56 @@ def test_detection_view_is_served() -> None:
         res = client.get("/detection")
         assert res.status_code == 200
         assert "Detection" in res.text and "/api/events" in res.text and "/api/state" in res.text
+        assert 'id="recheck"' in res.text and "/api/recheck" in res.text
+        assert "/api/state/hits/" in res.text and 'id="picker"' in res.text
         assert "/detection" in client.get("/").text
+
+
+def test_recheck_and_override_api() -> None:
+    """Tickets 17–18: mid-Turn Recheck + Manual Hit override over HTTP."""
+    from tests.test_hits_tip_fusion import draw_dart
+
+    client, service, factory = make_client()
+    with client:
+        assert client.post("/api/recheck").status_code == 409  # not accepted
+        _accept(client)
+        assert client.post("/api/recheck").status_code == 409  # no Hits yet
+
+        for slot, cam in CAMS.items():
+            factory.frames[slot] = draw_dart(cam.image, cam.pixel_of_mm(0.0, 103.4), angle_deg=5.0)
+        # Wait until the Turn commits T20.
+        for _ in range(80):
+            state = client.get("/api/state").json()
+            if state.get("throws"):
+                break
+            import time
+
+            time.sleep(0.05)
+        assert client.get("/api/state").json()["throws"]
+        before = client.get("/api/state").json()["throws"][0]["segmentName"]
+
+        # Force a wrong Manual score, then Recheck should restore from empty-ref vision.
+        patched = client.patch("/api/state/hits/0", json={"segmentName": "D6"})
+        assert patched.status_code == 200
+        assert patched.json()["throws"][0]["segmentName"] == "D6"
+        assert patched.json()["throws"][0]["method"] == "Manual"
+        assert patched.json()["event"] == "override"
+
+        rechecked = client.post("/api/recheck")
+        assert rechecked.status_code == 200, rechecked.text
+        after = rechecked.json()
+        assert after["event"] == "recheck"
+        assert after["throws"][0]["segmentName"] == before == "T20"
+
+        # Override again via Board-mm (T20 centre-ish already; use D20).
+        mm = client.patch("/api/state/hits/0", json={"xMm": 0.0, "yMm": 166.0})
+        assert mm.status_code == 200
+        assert mm.json()["throws"][0]["segmentName"] == "D20"
+        assert mm.json()["throws"][0]["method"] == "Manual"
+
+        bad = client.patch("/api/state/hits/9", json={"segmentName": "T20"})
+        assert bad.status_code == 404
+        assert client.patch("/api/state/hits/0", json={}).status_code == 400
 
 
 def test_accept_flow_and_revocation() -> None:

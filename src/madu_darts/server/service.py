@@ -316,6 +316,75 @@ class DetectionService:
         self.turn.reset(frames or None, time.monotonic())
         return self.turn_state()
 
+    def recheck(self) -> dict[str, Any]:
+        """``POST /api/recheck``: mid-Turn classical re-detect vs empty refs (ticket 17)."""
+        from madu_darts.calibration.model import FitStatus
+        from madu_darts.hits.recheck import recheck_hits
+
+        self.session.require_accepted()
+        if not self.turn.running:
+            raise RuntimeError("detection not running")
+        previous = self.turn.hits
+        if not previous:
+            raise RuntimeError("no Hits to recheck")
+        frames = self.latest_frames()
+        empty = self.turn.empty_refs()
+        if not frames or not empty:
+            raise RuntimeError("no frames / empty refs for recheck")
+        # Board must still show darts vs empty (operator mid-Turn).
+        if self.turn._board_empty(frames):  # noqa: SLF001 — intentional reuse of empty gate
+            raise RuntimeError("Board looks empty; nothing to recheck")
+        fit_ok = {s: self.session.get(s).status is FitStatus.PASS for s in self.session.slots}
+        t = time.monotonic()
+        new_hits = recheck_hits(
+            frames,
+            empty,
+            previous,
+            self.session.board_point,
+            tip_config=self._config.tip,
+            fusion_config=self._config.fusion,
+            fit_ok=fit_ok,
+            t_mono=t,
+        )
+        self.turn.replace_hits(new_hits, frames, t)
+        try:
+            pack = self.capture_now(reason="recheck")
+            self.live.attach_capture(str(pack["id"]))
+        except Exception as exc:
+            log.warning("recheck capture failed: %s", exc)
+        return self.api_state()
+
+    def override_hit(self, index: int, body: dict[str, Any]) -> dict[str, Any]:
+        """``PATCH /api/state/hits/{index}``: manual Segment / Board-mm correction (ticket 18)."""
+        from madu_darts.board import point_mm_to_segment, segment_name_to_mm
+        from madu_darts.hits.hit import Hit
+
+        hits = self.turn.hits
+        if not hits:
+            raise RuntimeError("no Hits to override")
+        if index < 0 or index >= len(hits):
+            raise IndexError(f"hit index {index} out of range")
+        if "xMm" in body and "yMm" in body:
+            x_mm, y_mm = float(body["xMm"]), float(body["yMm"])
+        elif "segmentName" in body and body["segmentName"]:
+            x_mm, y_mm = segment_name_to_mm(str(body["segmentName"]))
+        else:
+            raise ValueError("body needs segmentName or xMm+yMm")
+        segment = point_mm_to_segment(x_mm, y_mm)
+        old = hits[index]
+        hit = Hit(
+            x_mm=x_mm,
+            y_mm=y_mm,
+            segment=segment,
+            method="Manual",
+            confidence=1.0,
+            t_mono=time.monotonic(),
+            slot_votes=old.slot_votes,
+            spread_mm=0.0,
+        )
+        self.turn.override_hit(index, hit, time.monotonic())
+        return self.api_state()
+
     def hits(self) -> list[Hit]:
         return list(self.turn.hits)
 
