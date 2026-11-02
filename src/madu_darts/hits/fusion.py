@@ -7,6 +7,7 @@ from itertools import combinations
 
 import numpy as np
 
+from madu_darts.board import DOUBLE_OUTER_MM
 from madu_darts.hits.config import FusionConfig
 
 # Observed on live Autodarts 2.1 ``throws[].method``.
@@ -43,6 +44,30 @@ def on_board(xy: tuple[float, float] | np.ndarray, max_radius_mm: float) -> bool
     return _radius_mm(xy) <= float(max_radius_mm)
 
 
+def _resolve_double_outer_straddle(
+    used: list[int],
+    pts: dict[int, np.ndarray],
+    conf: dict[int, float],
+    method: str,
+) -> tuple[list[int], str]:
+    """If used cams straddle the outer double wire, keep only the inside vote(s).
+
+    Live 2026-11-02 V15/V17: cams within ``agree_mm`` but on opposite sides of
+    170 mm — the mean became a miss while one cam alone was a clean double.
+    Prefer the on-Board side (dart in the double vs tip noise just outside).
+    """
+    if len(used) < 2:
+        return used, method
+    radii = {s: _radius_mm(pts[s]) for s in used}
+    inside = [s for s in used if radii[s] <= DOUBLE_OUTER_MM]
+    outside = [s for s in used if radii[s] > DOUBLE_OUTER_MM]
+    if not inside or not outside:
+        return used, method
+    if len(inside) == 1:
+        return inside, SINGLE
+    return inside, MAJORITY if len(inside) >= 2 else SINGLE
+
+
 def fuse_points(
     points_mm: dict[int, tuple[float, float]],
     confidences: dict[int, float] | None = None,
@@ -63,6 +88,9 @@ def fuse_points(
     Ticket 15: when ``prefer_pass_cams`` and ``fit_ok`` mark a cam as weak, that
     vote is dropped whenever two healthy cams already agree within ``agree_mm``.
     ``UnanimousCam`` is reserved for three healthy agreeing cams.
+
+    Live follow-up: cams that spatially agree but straddle the outer double wire
+    keep only the inside vote(s) so a soft tip just outside cannot flip D→M.
     """
     cfg = config or FusionConfig()
     max_r = float(cfg.max_hit_radius_mm)
@@ -102,6 +130,8 @@ def fuse_points(
             used, method = [a, b], MAJORITY
         else:
             used, method = best_single(pool), SINGLE
+
+    used, method = _resolve_double_outer_straddle(used, pts, conf, method)
 
     stack = np.vstack([pts[s] for s in used])
     centre = stack.mean(axis=0)

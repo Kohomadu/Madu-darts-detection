@@ -94,6 +94,24 @@ def test_fuse_unanimous_majority_single() -> None:
     assert one is not None and one.method == SINGLE and one.spread_mm == 0.0
 
 
+def test_fuse_prefers_inside_double_when_cams_straddle_outer_wire() -> None:
+    """Live 2026-11-02 V15/V17: mean just outside 170 called M; one cam alone was D."""
+    cfg = FusionConfig(agree_mm=15.0)
+    # V15 dart3: cam1 D6 (r≈168), cam0 M (r≈175) — spatial agree, bed disagree.
+    v15 = {0: (172.87, -27.44), 1: (166.37, -21.58)}
+    fused = fuse_points(v15, {0: 0.35, 1: 0.60}, config=cfg)
+    assert fused is not None
+    assert fused.used_slots == (1,)
+    assert math.hypot(fused.x_mm, fused.y_mm) <= 170.0
+    assert point_mm_to_segment(fused.x_mm, fused.y_mm).name == "D6"
+    # V17 dart1: cam0 D18 (r≈170), cam1 just outside — prefer inside.
+    v17 = {0: (105.42, 132.99), 1: (108.70, 132.88)}
+    fused = fuse_points(v17, {0: 0.36, 1: 0.72}, config=cfg)
+    assert fused is not None
+    assert 0 in fused.used_slots and 1 not in fused.used_slots
+    assert point_mm_to_segment(fused.x_mm, fused.y_mm).name == "D18"
+
+
 def test_fuse_drops_warn_cam_when_two_pass_cams_agree() -> None:
     """Ticket 15: soft Calibration must not veto a tight Cam+1 pair."""
     cfg = FusionConfig(agree_mm=15.0, prefer_pass_cams=True)

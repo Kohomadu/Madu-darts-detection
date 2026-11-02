@@ -90,4 +90,9 @@ Cam0 now binds **both** bands. Absolute RMS is a bit above the ≲ 1.2 stretch t
 ### Verification
 
 - Full suite **289 passed** (incl. 07-recording replay floor ≥ 20/24 and new refine/fusion tests).
-- Live Auto + Accept + D/T throws: **pending** operator pull/restart on the Board (see Comments).
+- Live Auto + Accept on Board after pull: cam0 both bands bound (~1.5 mm, ~210 edge inliers); Accept OK. Startup alone had cam0 **pass 1.37**.
+- Live session 18 visits (takeoutFinished on 17/18): trebles largely correct (T12/T1/T19/T20). Residual D→M on V15/V17 were **fusion means straddling 170 mm** — fixed in follow-up by preferring the inside-double vote(s). False T5 (V6 BestCam) and possible V10 BestCam sector miss left for tip/BestCam work, not Calibration.
+
+## Comments
+
+- 2026-11-02 live: operator notes — first T5 wrong (V6); #10 last dart claimed T1 (recorded S20 BestCam; cam1 was T20); #15 last M6 was D6; #17 M18 was D18. Capture packs under Board `/api/captures` from 143022…143729.
