@@ -61,9 +61,12 @@
       <button class="primary" id="accept" disabled>Accept calibration</button>
       <button class="danger" id="reset">Reset</button>
       <button id="auto-all">Auto-calibrate all</button>
+      <label style="flex-direction:row;align-items:center;gap:6px;color:var(--fg);font-size:13px">
+        <input type="checkbox" id="residuals"> Residuals
+      </label>
       <span id="blockers"></span>
     </div>
-    <p style="color:var(--muted);margin:10px 0 0">Per cam: Auto applies this Board's mount rotate-20 defaults (cams 0/1/2 → offsets 10/4/16) or the last Accepted offsets. Confirm the red wedge covers the physical <b>20</b> (arrows to fine-tune), and in the inset warped view the green rings sit on the wires. Coloured dots are measured wire residuals (green ≤ 0.75 mm, yellow ≤ 1.5, orange ≤ 3, red above); hollow rings are outliers. Magenta arcs mark the far double annulus — the foreshortened side. Accept also requires that far double RMS ≤ 5.5 mm and max ≤ 12 mm (a clearly soft foreshortened double blocks; milder softness only warns).</p>
+    <p style="color:var(--muted);margin:10px 0 0">Per cam: Auto applies mount rotate-20 defaults (or last Accepted). Nudge the spider with pan / fine-rotate until wires sit, then Accept — the full bind is saved and Auto will not overwrite it without Reset bind / Re-Auto. Confirm the red wedge covers physical <b>20</b>. Far-double numbers stay in the cam row. Enable Residuals for diagnostic dots (green ≤ 0.75 mm … red above) and magenta far-double arcs. Accept also requires far double RMS ≤ 5.5 mm and max ≤ 12 mm.</p>
   </section>
 
   <section class="panel">
@@ -111,12 +114,33 @@
           <button data-left title="Move 20 one field left">◀ 20</button>
           <button data-auto title="Auto-calibrate this cam">✨ Auto</button>
           <button data-right title="Move 20 one field right">20 ▶</button>
+          <button data-reset-bind title="Allow Auto to replace this saved bind" style="display:none">Reset bind</button>
           <span class="grow" data-rms style="color:var(--muted)"></span>
+        </div>
+        <div class="row" style="padding-top:0">
+          <button data-pan-n title="Nudge spider up">N</button>
+          <button data-pan-w title="Nudge spider left">W</button>
+          <button data-pan-e title="Nudge spider right">E</button>
+          <button data-pan-s title="Nudge spider down">S</button>
+          <button data-rot-ccw title="Fine rotate −1°">⟲ 1°</button>
+          <button data-rot-cw title="Fine rotate +1°">1° ⟳</button>
+          <button data-revert title="Revert to last Auto" style="display:none">Undo Auto</button>
         </div>
         <div class="err" data-err></div>`;
       $('[data-left]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/rotate-left`);
       $('[data-right]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/rotate-right`);
-      $('[data-auto]', el).onclick = () => act('POST', `/api/calibration/auto/${s.slot}`);
+      $('[data-auto]', el).onclick = () => {
+        const locked = el.dataset.bindLocked === '1';
+        act('POST', `/api/calibration/auto/${s.slot}${locked ? '?force=1' : ''}`);
+      };
+      $('[data-reset-bind]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/reset-bind`);
+      $('[data-pan-n]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/nudge-pan`, { dx: 0, dy: -2 });
+      $('[data-pan-s]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/nudge-pan`, { dx: 0, dy: 2 });
+      $('[data-pan-w]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/nudge-pan`, { dx: -2, dy: 0 });
+      $('[data-pan-e]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/nudge-pan`, { dx: 2, dy: 0 });
+      $('[data-rot-ccw]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/nudge-rotate`, { deg: 1 });
+      $('[data-rot-cw]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/nudge-rotate`, { deg: -1 });
+      $('[data-revert]', el).onclick = () => act('POST', `/api/calibration/${s.slot}/revert-auto`);
       root.appendChild(el);
       tiles[s.slot] = el;
 
@@ -150,14 +174,22 @@
     for (const slot of slots) {
       const c = snap.cams[String(slot)]; const el = tiles[slot]; if (!c || !el) continue;
       const badge = $('[data-badge]', el); badge.className = `badge ${c.status}`; badge.textContent = c.status.toUpperCase();
-      $('[data-rms]', el).textContent = c.hasFit ? fitLine(c) : '';
+      $('[data-rms]', el).textContent = c.hasFit ? fitLine(c) + (c.bindLocked ? ' · saved' : '') : '';
       $('[data-err]', el).textContent = c.error || '';
+      el.dataset.bindLocked = c.bindLocked ? '1' : '0';
+      const autoBtn = $('[data-auto]', el);
+      if (autoBtn) autoBtn.textContent = c.bindLocked ? '↻ Re-Auto' : '✨ Auto';
+      const rb = $('[data-reset-bind]', el);
+      if (rb) rb.style.display = c.bindLocked ? '' : 'none';
+      const rev = $('[data-revert]', el);
+      if (rev) rev.style.display = c.hasAutoSeed ? '' : 'none';
     }
     const banner = $('#banner');
     if (snap.accepted) { banner.className = 'ready'; banner.textContent = 'Calibration accepted — Hits may be claimed. Any change revokes acceptance.'; }
     else { banner.className = 'required'; banner.textContent = 'Calibration not accepted — no Hits will be claimed.'; }
     $('#accept').disabled = !snap.canAccept || snap.accepted;
     $('#blockers').textContent = snap.blockers.length ? snap.blockers.join(' · ') : '';
+    if (typeof snap.showResiduals === 'boolean') $('#residuals').checked = snap.showResiduals;
   }
 
   async function act(method, url, body) {
@@ -168,6 +200,12 @@
   $('#accept').onclick = () => act('POST', '/api/calibration/accept');
   $('#reset').onclick = () => act('POST', '/api/calibration/reset');
   $('#auto-all').onclick = () => act('POST', '/api/calibration/auto');
+  $('#residuals').onchange = async () => {
+    try {
+      render(await api('PATCH', '/api/calibration/display', { showResiduals: $('#residuals').checked }));
+      refreshFeeds();
+    } catch (e) { $('#blockers').textContent = e.message; }
+  };
   $('#apply').onclick = async () => {
     const [w, h] = $('#res').value.split('x').map(Number);
     const rotate180 = {};

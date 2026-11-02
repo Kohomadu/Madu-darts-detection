@@ -81,6 +81,7 @@ def test_detection_service_auto_calibrate_uses_board_defaults(tmp_path: Path) ->
             stream_fps=50.0,
             rotate_offsets=dict(DEFAULT_ROTATE_OFFSETS),
             offset_store=str(tmp_path / "offsets.json"),
+            bind_store=str(tmp_path / "bind.json"),
         ),
         ingest_factory=factory,
     )

@@ -158,8 +158,18 @@ def _put_badge(image: np.ndarray, text: str, colour: tuple[int, int, int]) -> No
     cv2.putText(image, text, (14, 29), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2, cv2.LINE_AA)
 
 
-def draw_spiderweb(image: np.ndarray, cal: CamCalibration, *, highlight_twenty: bool = True) -> np.ndarray:
-    """Project rings + wires onto the feed and tint sector 20 red (operator rotate-20 aid)."""
+def draw_spiderweb(
+    image: np.ndarray,
+    cal: CamCalibration,
+    *,
+    highlight_twenty: bool = True,
+    show_residuals: bool = False,
+) -> np.ndarray:
+    """Project rings + wires onto the feed and tint sector 20 red (operator rotate-20 aid).
+
+    Residual dots default off so the operator can judge wire align (clean spider);
+    pass ``show_residuals=True`` for the diagnostic overlay.
+    """
     import cv2
 
     out = np.ascontiguousarray(image).copy()
@@ -184,7 +194,8 @@ def draw_spiderweb(image: np.ndarray, cal: CamCalibration, *, highlight_twenty: 
         p1 = board_mm_to_image(h, k, polar_mm(DOUBLE_OUTER_MM, angle))
         cv2.line(out, tuple(np.round(p0).astype(int)), tuple(np.round(p1).astype(int)), WEB_COLOUR, 1, lineType=cv2.LINE_AA)
 
-    _draw_residuals(out, cal)
+    if show_residuals:
+        _draw_residuals(out, cal)
     _put_badge(out, _status_text(cal), STATUS_COLOURS[cal.status])
     return out
 
@@ -203,6 +214,7 @@ def draw_warped_board(
     *,
     size_px: int = WARPED_SIZE_PX,
     margin_mm: float = WARPED_MARGIN_MM,
+    show_residuals: bool = False,
 ) -> np.ndarray:
     """Warp the feed onto the Board plane and draw the ideal rings/wires over it.
 
@@ -242,12 +254,19 @@ def draw_warped_board(
 
     label = px(polar_mm(DOUBLE_OUTER_MM + margin_mm * 0.5, 0.0))
     cv2.putText(out, "20", (int(label[0]) - 10, int(label[1]) + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, TWENTY_COLOUR, 2, cv2.LINE_AA)
-    _draw_residuals(out, cal, warped_mm_to_px=mm_to_px)
+    if show_residuals:
+        _draw_residuals(out, cal, warped_mm_to_px=mm_to_px)
     _put_badge(out, _status_text(cal), STATUS_COLOURS[cal.status])
     return out
 
 
-def draw_calibration_tile(image: np.ndarray, cal: CamCalibration, *, pip_fraction: float = 0.38) -> np.ndarray:
+def draw_calibration_tile(
+    image: np.ndarray,
+    cal: CamCalibration,
+    *,
+    pip_fraction: float = 0.38,
+    show_residuals: bool = False,
+) -> np.ndarray:
     """Spiderweb feed with the warped-Board check inset bottom-right (one stream per cam).
 
     Browsers allow ~6 connections per host; compositing keeps the Calibration
@@ -255,10 +274,10 @@ def draw_calibration_tile(image: np.ndarray, cal: CamCalibration, *, pip_fractio
     """
     import cv2
 
-    out = draw_spiderweb(image, cal)
+    out = draw_spiderweb(image, cal, show_residuals=show_residuals)
     h, w = out.shape[:2]
     size = max(64, int(round(min(h, w) * pip_fraction)))
-    pip = draw_warped_board(image, cal, size_px=size)
+    pip = draw_warped_board(image, cal, size_px=size, show_residuals=show_residuals)
     y0, x0 = h - size - 8, w - size - 8
     if y0 < 0 or x0 < 0:
         return out

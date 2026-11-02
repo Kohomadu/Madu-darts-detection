@@ -99,7 +99,7 @@ def test_overlay_paints_soft_samples_warm_and_calls_out_far_annulus() -> None:
     assert field is not None
     cal = CamCalibration(slot=0, homography=cam.truth_homography, rms_mm=0.4, residuals=field)
     before = cam.image.copy()
-    out = draw_spiderweb(cam.image, cal, highlight_twenty=False)
+    out = draw_spiderweb(cam.image, cal, highlight_twenty=False, show_residuals=True)
     np.testing.assert_array_equal(cam.image, before)
 
     soft_px = _px(out, cam.pixel_of_mm(*soft_mm))
@@ -112,7 +112,7 @@ def test_overlay_paints_soft_samples_warm_and_calls_out_far_annulus() -> None:
     magenta = np.all(np.abs(out.astype(int) - np.array(FAR_ARC_COLOUR)) <= 30, axis=2)
     assert int(magenta.sum()) > 20
 
-    warped = draw_warped_board(cam.image, cal, size_px=400)
+    warped = draw_warped_board(cam.image, cal, size_px=400, show_residuals=True)
     assert warped.shape == (400, 400, 3)
     warped_magenta = np.all(np.abs(warped.astype(int) - np.array(FAR_ARC_COLOUR)) <= 40, axis=2)
     assert int(warped_magenta.sum()) > 10

@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 
 from madu_darts.calibration import AutoFitParams, CalibrationSession
+from madu_darts.calibration.bind_store import DEFAULT_BIND_STORE
 from madu_darts.calibration.mount import DEFAULT_OFFSET_STORE, DEFAULT_ROTATE_OFFSETS
 from madu_darts.cameras import CameraIngest, CamFrame, IngestConfig
 from madu_darts.hits import FusionConfig, Hit, HitDetector, TipConfig
@@ -53,6 +54,8 @@ class ServiceConfig:
     rotate_offsets: dict[int, int] | None = None
     #: Persist last Accepted offsets here (re-applied on next suggest). ``None`` disables.
     offset_store: str | None = str(DEFAULT_OFFSET_STORE)
+    #: Persist Accepted full binds (H + rotate-20). ``None`` disables.
+    bind_store: str | None = str(DEFAULT_BIND_STORE)
 
 
 class FramePump(threading.Thread):
@@ -130,6 +133,7 @@ class DetectionService:
             params=self._config.autofit,
             default_rotate_offsets=offsets,
             offset_store=self._config.offset_store,
+            bind_store=self._config.bind_store,
         )
         self.board_model = BoardModel(slots)
         self.motion_gate = MotionGate(self.board_model, self._config.motion, slots=slots)
@@ -146,6 +150,8 @@ class DetectionService:
                 s: self.session.get(s).status is FitStatus.PASS for s in self.session.slots
             },
         )
+        #: Calibration residual dots (ticket 19); default off for a clean spider.
+        self._show_residuals = False
         self.live = LiveStore(
             root=None if self._config.capture_root is None else Path(self._config.capture_root),
             max_visits=self._config.max_history,
@@ -177,7 +183,25 @@ class DetectionService:
 
     def start(self) -> None:
         if self.reopen_cameras():
-            self.recalibrate()
+            if self.session.load_saved_binds():
+                packs = self._calibration_frame_packs(n=1)
+                frames = {s: imgs[0] for s, imgs in packs.items() if imgs}
+                self.session.rescore(frames)
+                # Auto only unbound slots (mounts moved / first-time cams).
+                unbound = [s for s in self.session.slots if not self.session.is_bound(s)]
+                if unbound:
+                    self.recalibrate()
+                elif not self.session.accepted:
+                    self.on_calibration_reset()
+            else:
+                self.recalibrate()
+
+    @property
+    def show_residuals(self) -> bool:
+        return self._show_residuals
+
+    def set_show_residuals(self, value: bool) -> None:
+        self._show_residuals = bool(value)
 
     def stop(self) -> None:
         with self._lock:
@@ -510,16 +534,17 @@ class DetectionService:
                 packs.setdefault(slot, []).append(image.copy())
         return {s: imgs for s, imgs in packs.items() if imgs}
 
-    def recalibrate(self, slot: int | None = None) -> dict[str, Any]:
+    def recalibrate(self, slot: int | None = None, *, force: bool = False) -> dict[str, Any]:
         packs = self._calibration_frame_packs()
         if slot is None:
-            self.session.suggest_all(packs)
+            self.session.suggest_all(packs, force=force)
         else:
             images = packs.get(slot)
             if not images:
-                self.session.clear(slot, "no frame from camera")
+                if force or not self.session.is_bound(slot):
+                    self.session.clear(slot, "no frame from camera")
             else:
-                self.session.suggest(slot, images)
+                self.session.suggest(slot, images, force=force)
         # Any calibration change revokes Accept (session) — park the detector.
         if not self.session.accepted:
             self.on_calibration_reset()

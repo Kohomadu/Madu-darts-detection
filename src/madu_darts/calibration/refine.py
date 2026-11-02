@@ -78,6 +78,10 @@ class RefineParams:
     min_inliers: int = 40
     max_iters: int = 3
     min_improvement_mm: float = 0.05
+    #: Mild near-hemisphere up-weight during LS polish (1.0 = off). Far samples stay.
+    near_weight: float = 1.5
+    #: Board mount angle (deg clockwise from +y); ``None`` disables near weighting.
+    mount_angle_deg: float | None = None
 
 
 def _gray(image: np.ndarray) -> np.ndarray:
@@ -337,13 +341,27 @@ def refine_homography(
                 best_q = q
             break
         # Polish: least-squares on RANSAC inliers (OpenCV method 0).
+        # Mild near-hemisphere up-weight: duplicate near inliers; never drop far ones.
         if n_in >= 8:
             try:
                 import cv2
 
+                px_in = px[inliers]
+                mm_in = mm[inliers]
+                if p.near_weight > 1.0 and p.mount_angle_deg is not None and len(mm_in):
+                    tip_a = float(p.mount_angle_deg) % 360.0
+                    ang = np.degrees(np.arctan2(mm_in[:, 0], mm_in[:, 1]))
+                    ang = np.where(ang < 0.0, ang + 360.0, ang)
+                    dist = np.minimum(np.abs(ang - tip_a) % 360.0, 360.0 - (np.abs(ang - tip_a) % 360.0))
+                    near = dist <= 90.0
+                    if int(near.sum()) > 0:
+                        # Integer weight via stacking (OpenCV findHomography has no weights).
+                        extra = max(1, int(round(p.near_weight)) - 1)
+                        px_in = np.vstack([px_in] + [px_in[near]] * extra)
+                        mm_in = np.vstack([mm_in] + [mm_in[near]] * extra)
                 h_ls, _ = cv2.findHomography(
-                    px[inliers].astype(np.float32),
-                    mm[inliers].astype(np.float32),
+                    px_in.astype(np.float32),
+                    mm_in.astype(np.float32),
                     0,
                 )
                 if h_ls is not None:

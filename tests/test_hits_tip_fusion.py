@@ -72,7 +72,7 @@ def test_locate_tip_rejects_no_change_and_hand_like_blob() -> None:
 
 
 def test_fuse_unanimous_majority_single() -> None:
-    cfg = FusionConfig(agree_mm=15.0)
+    cfg = FusionConfig(agree_mm=15.0, mount_angles_deg={})
     close = {0: (10.0, 100.0), 1: (12.0, 103.0), 2: (9.0, 101.0)}
     fused = fuse_points(close, config=cfg)
     assert fused is not None and fused.method == UNANIMOUS and fused.used_slots == (0, 1, 2)
@@ -188,6 +188,33 @@ def test_fuse_drops_occluded_cam_when_peers_remain() -> None:
     all_near = {0: (0.0, 103.0), 1: (1.0, 104.0), 2: (-1.0, 102.5)}
     kept = fuse_points(all_near, config=cfg, occluded={0, 1, 2})
     assert kept is not None and kept.method == UNANIMOUS and kept.used_slots == (0, 1, 2)
+
+
+def test_fuse_soft_tie_weights_near_mount_cam() -> None:
+    """Soft multi-cam spread: weight toward the cam whose mount faces the tip."""
+    from madu_darts.calibration.homography import polar_mm
+
+    # Tip near sector 20 (cam0 mount). Soft spread across cams (still within agree_mm).
+    points = {
+        0: polar_mm(103.0, 0.0),
+        1: polar_mm(103.0, 4.0),
+        2: polar_mm(103.0, -4.0),
+    }
+    plain = fuse_points(points, config=FusionConfig(agree_mm=20.0, mount_angles_deg={}, soft_tie_spread_mm=0.5))
+    weighted = fuse_points(
+        points,
+        config=FusionConfig(
+            agree_mm=20.0,
+            mount_angles_deg={0: 0.0, 1: 234.0, 2: 126.0},
+            soft_tie_spread_mm=0.5,
+        ),
+    )
+    assert plain is not None and weighted is not None
+    assert plain.method == UNANIMOUS and weighted.method == UNANIMOUS
+    # Near-weighted centre should sit closer to cam0's tip than the plain mean.
+    assert abs(weighted.x_mm - points[0][0]) + abs(weighted.y_mm - points[0][1]) < abs(
+        plain.x_mm - points[0][0]
+    ) + abs(plain.y_mm - points[0][1])
 
 
 def test_occluded_slots_from_footprint_and_prior_tip() -> None:

@@ -985,10 +985,13 @@ def suggest(image: np.ndarray, slot: int = 0, params: AutoFitParams | None = Non
     # and only re-scored against measured edges so the badge stays honest.
     from madu_darts.calibration.refine import evaluate_fit, measure_board_edges
 
+    from madu_darts.calibration.mount import DEFAULT_MOUNT_ANGLES_DEG
+
     refine_params = RefineParams(
         max_iters=p.refine_iters,
         ransac_threshold_mm=min(p.ransac_threshold_mm, 2.5),
         min_inliers=max(24, p.min_inliers),
+        mount_angle_deg=DEFAULT_MOUNT_ANGLES_DEG.get(int(slot)),
     )
     seed_px, seed_mm = measure_board_edges(image, homography, refine_params)
     seed_edge = (

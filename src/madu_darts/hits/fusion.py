@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -164,6 +165,48 @@ def _resolve_treble_wire_straddle(
     return on_treble, MAJORITY
 
 
+def _tip_angle_deg(xy: np.ndarray | tuple[float, float]) -> float:
+    p = np.asarray(xy, dtype=np.float64).reshape(2)
+    ang = math.degrees(math.atan2(float(p[0]), float(p[1])))
+    return ang + 360.0 if ang < 0.0 else ang
+
+
+def _angle_dist_deg(a: float, b: float) -> float:
+    d = abs(a - b) % 360.0
+    return min(d, 360.0 - d)
+
+
+def _near_cam_weight(slot: int, tip_angle_deg: float, mounts: dict[int, float]) -> float:
+    """1.0 at the mount, ~0.15 on the opposite half (never zero — far cam still votes)."""
+    if slot not in mounts:
+        return 1.0
+    dist = _angle_dist_deg(tip_angle_deg, float(mounts[slot]))
+    return max(0.15, 0.5 + 0.5 * math.cos(math.radians(dist)))
+
+
+def _weighted_centre(
+    used: list[int],
+    pts: dict[int, np.ndarray],
+    mounts: dict[int, float] | None,
+    *,
+    soft_tie_spread_mm: float,
+    method: str,
+) -> tuple[np.ndarray, float]:
+    """Equal mean when UnanimousCam is tight; else near-hemisphere weights."""
+    stack = np.vstack([pts[s] for s in used])
+    plain = stack.mean(axis=0)
+    spread = float(np.max(np.linalg.norm(stack - plain, axis=1))) if len(used) > 1 else 0.0
+    if mounts is None or len(used) < 2:
+        return plain, spread
+    if method == UNANIMOUS and spread <= soft_tie_spread_mm:
+        return plain, spread
+    tip_a = _tip_angle_deg(plain)
+    weights = np.asarray([_near_cam_weight(s, tip_a, mounts) for s in used], dtype=np.float64)
+    centre = (stack * weights[:, None]).sum(axis=0) / float(weights.sum())
+    spread = float(np.max(np.linalg.norm(stack - centre, axis=1)))
+    return centre, spread
+
+
 def fuse_points(
     points_mm: dict[int, tuple[float, float]],
     confidences: dict[int, float] | None = None,
@@ -194,9 +237,14 @@ def fuse_points(
 
     Ticket 24: ``occluded`` cams (tip in a prior dart footprint / stuck on a prior
     tip while peers moved on) are dropped when at least one clear cam remains.
+
+    Near-hemisphere: after wire straddles (and on soft multi-cam ties) prefer /
+    weight the cam whose mount is closest to the tip's Board angle. Tight
+    ``UnanimousCam`` groups keep an equal mean.
     """
     cfg = config or FusionConfig()
     max_r = float(cfg.max_hit_radius_mm)
+    mounts = dict(cfg.mount_angles_deg) if cfg.mount_angles_deg else None
     in_board = {s: xy for s, xy in points_mm.items() if on_board(xy, max_r)}
     off_board = tuple(sorted(s for s in points_mm if s not in in_board))
     slots = sorted(in_board)
@@ -209,7 +257,14 @@ def fuse_points(
     occluded_set = frozenset(int(s) for s in (occluded or ()) if int(s) in pts)
 
     def best_single(candidates: list[int]) -> list[int]:
-        return [max(candidates, key=lambda s: (healthy[s], conf.get(s, 0.0)))]
+        seed = np.mean(np.vstack([pts[s] for s in candidates]), axis=0)
+        tip_a = _tip_angle_deg(seed)
+
+        def key(s: int) -> tuple:
+            near_w = _near_cam_weight(s, tip_a, mounts) if mounts else 1.0
+            return (healthy[s], near_w, conf.get(s, 0.0))
+
+        return [max(candidates, key=key)]
 
     def agreeing(group: list[int]) -> bool:
         if len(group) < 2:
@@ -244,11 +299,15 @@ def fuse_points(
     used, method = _resolve_double_outer_straddle(used, pts, conf, method)
     used, method = _resolve_treble_wire_straddle(used, pts, conf, method)
 
-    stack = np.vstack([pts[s] for s in used])
-    centre = stack.mean(axis=0)
+    centre, spread = _weighted_centre(
+        used,
+        pts,
+        mounts,
+        soft_tie_spread_mm=float(cfg.soft_tie_spread_mm),
+        method=method,
+    )
     if not on_board(centre, max_r):
         return None
-    spread = float(np.max(np.linalg.norm(stack - centre, axis=1))) if len(used) > 1 else 0.0
     dropped = tuple(sorted(set(off_board) | {s for s in slots if s not in used}))
     return FusedPoint(
         x_mm=float(centre[0]),

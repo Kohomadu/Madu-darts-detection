@@ -151,16 +151,51 @@ def test_accept_then_gate_opens_and_reset_closes() -> None:
     assert session.accepted
 
 
-@pytest.mark.parametrize("action", ["rotate_left", "rotate_right", "suggest"])
+@pytest.mark.parametrize("action", ["rotate_left", "rotate_right", "suggest_force"])
 def test_any_cam_change_revokes_accept(action: str) -> None:
     session = CalibrationSession(suggester=_fake_suggester({0: _good(0), 1: _good(1), 2: _good(2)}))
     session.suggest_all(FRAMES)
     session.accept()
-    if action == "suggest":
-        session.suggest(1, FRAMES[1])
+    if action == "suggest_force":
+        # Bound cams ignore Auto unless force (Re-Auto / Reset bind).
+        session.suggest(1, FRAMES[1], force=True)
     else:
         getattr(session, action)(1)
     assert not session.accepted
+
+
+def test_bound_cam_skips_auto_until_force(tmp_path) -> None:
+    store = tmp_path / "bind.json"
+    session = CalibrationSession(
+        suggester=_fake_suggester({0: _good(0), 1: _good(1), 2: _good(2)}),
+        bind_store=store,
+        offset_store=None,
+    )
+    session.suggest_all(FRAMES)
+    session.accept()
+    assert session.is_bound(1)
+    h_before = session.get(1).homography.copy()
+
+    suggester = _fake_suggester({0: _good(0, rms=0.4), 1: _good(1, rms=0.4), 2: _good(2, rms=0.4)})
+    session2 = CalibrationSession(suggester=suggester, bind_store=store, offset_store=None)
+    assert session2.load_saved_binds()
+    assert session2.is_bound(1)
+    session2.suggest(1, FRAMES[1])  # no force — keep saved bind
+    assert suggester.calls == []
+    np.testing.assert_allclose(session2.get(1).homography, h_before)
+    session2.suggest(1, FRAMES[1], force=True)
+    assert suggester.calls == [1]
+    assert not session2.is_bound(1)
+
+
+def test_nudge_pan_and_revert_auto() -> None:
+    session = CalibrationSession(slots=(0,), suggester=_fake_suggester({0: _good(0)}))
+    session.suggest(0, FRAMES[0])
+    seed_h = session.get(0).homography.copy()
+    session.nudge_pan(0, 5.0, -3.0)
+    assert not np.allclose(session.get(0).homography, seed_h)
+    session.revert_auto(0)
+    np.testing.assert_allclose(session.get(0).homography, seed_h)
 
 
 def test_rotate_requires_a_fit() -> None:
@@ -245,6 +280,8 @@ def test_snapshot_is_json_shaped() -> None:
         "nearDouble": None,
         "error": None,
         "hasFit": True,
+        "bindLocked": False,
+        "hasAutoSeed": True,
     }
     assert snap["cams"]["1"]["status"] == "none" and snap["cams"]["1"]["error"] == "blank"
     assert snap["cams"]["2"]["status"] == "warn"

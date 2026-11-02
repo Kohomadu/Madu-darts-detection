@@ -30,6 +30,19 @@ class CamConfigPatch(BaseModel):
     rotate180: dict[int, bool] | None = None
 
 
+class CalibrationDisplayPatch(BaseModel):
+    showResiduals: bool | None = None
+
+
+class NudgePanBody(BaseModel):
+    dx: float = 0.0
+    dy: float = 0.0
+
+
+class NudgeRotateBody(BaseModel):
+    deg: float = 1.0
+
+
 class HitOverridePatch(BaseModel):
     """Manual Hit correction: segment label and/or Board-mm point."""
 
@@ -76,13 +89,13 @@ def create_app(service: DetectionService) -> FastAPI:
         frame = service.frame(slot)
         if frame is None:
             return _placeholder()
-        return draw_calibration_tile(frame, session.get(slot))
+        return draw_calibration_tile(frame, session.get(slot), show_residuals=service.show_residuals)
 
     def warped_image(slot: int) -> np.ndarray:
         frame = service.frame(slot)
         if frame is None:
             return _placeholder(400, 400)
-        return draw_warped_board(frame, session.get(slot))
+        return draw_warped_board(frame, session.get(slot), show_residuals=service.show_residuals)
 
     # --- view ---
 
@@ -274,22 +287,32 @@ def create_app(service: DetectionService) -> FastAPI:
 
     @app.get("/api/calibration")
     def calibration() -> dict[str, Any]:
-        return session.snapshot()
+        snap = session.snapshot()
+        snap["showResiduals"] = service.show_residuals
+        return snap
+
+    @app.patch("/api/calibration/display")
+    def calibration_display(body: CalibrationDisplayPatch) -> dict[str, Any]:
+        if body.showResiduals is not None:
+            service.set_show_residuals(body.showResiduals)
+        snap = session.snapshot()
+        snap["showResiduals"] = service.show_residuals
+        return snap
 
     @app.get("/api/config/calibration/ellipses")
     def ellipses() -> dict[str, Any]:
         return session.to_autodarts_ellipses()
 
     @app.post("/api/calibration/auto")
-    def auto_all() -> dict[str, Any]:
-        snap = service.recalibrate()
+    def auto_all(force: int = Query(default=0)) -> dict[str, Any]:
+        snap = service.recalibrate(force=bool(force))
         service.sync_motion_with_calibration()
         service.publish_state()
         return snap
 
     @app.post("/api/calibration/auto/{slot}")
-    def auto_one(slot: int) -> dict[str, Any]:
-        snap = service.recalibrate(check_slot(slot))
+    def auto_one(slot: int, force: int = Query(default=0)) -> dict[str, Any]:
+        snap = service.recalibrate(check_slot(slot), force=bool(force))
         service.sync_motion_with_calibration()
         service.publish_state()
         return snap
@@ -307,6 +330,43 @@ def create_app(service: DetectionService) -> FastAPI:
             session.rotate_left(slot) if left else session.rotate_right(slot)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        service.sync_motion_with_calibration()
+        service.publish_state()
+        return session.snapshot()
+
+    @app.post("/api/calibration/{slot}/nudge-pan")
+    def nudge_pan(slot: int, body: NudgePanBody) -> dict[str, Any]:
+        try:
+            session.nudge_pan(check_slot(slot), body.dx, body.dy)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        service.sync_motion_with_calibration()
+        service.publish_state()
+        return session.snapshot()
+
+    @app.post("/api/calibration/{slot}/nudge-rotate")
+    def nudge_rotate(slot: int, body: NudgeRotateBody) -> dict[str, Any]:
+        try:
+            session.nudge_rotate(check_slot(slot), body.deg)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        service.sync_motion_with_calibration()
+        service.publish_state()
+        return session.snapshot()
+
+    @app.post("/api/calibration/{slot}/revert-auto")
+    def revert_auto(slot: int) -> dict[str, Any]:
+        try:
+            session.revert_auto(check_slot(slot))
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        service.sync_motion_with_calibration()
+        service.publish_state()
+        return session.snapshot()
+
+    @app.post("/api/calibration/{slot}/reset-bind")
+    def reset_bind(slot: int) -> dict[str, Any]:
+        session.reset_bind(check_slot(slot))
         service.sync_motion_with_calibration()
         service.publish_state()
         return session.snapshot()

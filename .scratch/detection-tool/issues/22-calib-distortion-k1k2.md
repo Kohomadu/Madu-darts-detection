@@ -1,11 +1,15 @@
 Status: needs-triage
 Type: task
 Model: premium
-Blocked by: 19, 21
+Blocked by: 19, 21, spiderweb-manual-bind
 
 # Optional radial distortion (k1/k2) before homography
 
 Cam0’s perspective still softens the far ring after edge refine (ticket 15). A-Dartment-style joint fit of light distortion + H may bind the double/treble without jumping to full PnP.
+
+## Deferral (spiderweb reliability plan)
+
+**Do not start until** operators have Accepted hand-tuned binds (pan + fine rotate) and live Turns still show **systematic** far-ring bend on those saved Hs. Manual bind + near-cam fusion + mild near-weighted refine are the next levers; k1/k2 is last.
 
 ## Scope
 

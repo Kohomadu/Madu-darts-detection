@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from madu_darts.calibration.mount import DEFAULT_MOUNT_ANGLES_DEG
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,12 @@ class FusionConfig:
     #: Board-mm radius around a prior tip: a cam tip this close is occluded only when
     #: at least one other cam is farther away (locked onto the old dart).
     occlusion_tip_radius_mm: float = 8.0
+    #: Per-slot Board mount angles (deg clockwise from +y). Used to prefer the
+    #: near-hemisphere cam on wire straddles and soft multi-cam ties.
+    mount_angles_deg: dict[int, float] = field(default_factory=lambda: dict(DEFAULT_MOUNT_ANGLES_DEG))
+    #: When agreeing cams still span more than this, weight the mean toward the
+    #: near-mount cam instead of a plain average (tight UnanimousCam stays equal).
+    soft_tie_spread_mm: float = 4.0
 
     def to_api(self) -> dict[str, Any]:
         return {
@@ -79,6 +87,8 @@ class FusionConfig:
             "dropOccludedCams": self.drop_occluded_cams,
             "occlusionBboxPadPx": self.occlusion_bbox_pad_px,
             "occlusionTipRadiusMm": self.occlusion_tip_radius_mm,
+            "softTieSpreadMm": self.soft_tie_spread_mm,
+            "mountAnglesDeg": {str(k): float(v) for k, v in sorted(self.mount_angles_deg.items())},
         }
 
 

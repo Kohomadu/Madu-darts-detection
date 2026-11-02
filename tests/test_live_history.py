@@ -35,6 +35,7 @@ def live_client(tmp_path: Path):
             capture_root=str(tmp_path / "live"),
             rotate_offsets={},
             offset_store=None,
+            bind_store=None,
         ),
         ingest_factory=factory,
     )

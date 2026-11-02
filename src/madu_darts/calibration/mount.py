@@ -20,6 +20,11 @@ log = logging.getLogger(__name__)
 # Cam 2 near 15 → paints 14 as 20 → 4 right (= 16 left).
 DEFAULT_ROTATE_OFFSETS: dict[int, int] = {0: 10, 1: 4, 2: 16}
 
+# Board-plane mount angles (deg clockwise from +y / sector 20) for near-hemisphere
+# fusion + mild near-weighted refine. Cam 0 sits above 20; cams 1/2 on the ring
+# near sectors 16 and 15 (live Board 2026-11-02).
+DEFAULT_MOUNT_ANGLES_DEG: dict[int, float] = {0: 0.0, 1: 234.0, 2: 126.0}
+
 DEFAULT_OFFSET_STORE = Path("captures") / "calibration_offsets.json"
 
 
@@ -52,6 +57,7 @@ def save_rotate_offsets(path: Path, offsets: dict[int, int]) -> None:
 
 
 __all__ = [
+    "DEFAULT_MOUNT_ANGLES_DEG",
     "DEFAULT_OFFSET_STORE",
     "DEFAULT_ROTATE_OFFSETS",
     "load_rotate_offsets",
