@@ -187,11 +187,13 @@ Evidence notes ([EVIDENCE.md](https://github.com/jonaswre/autodarts-nixos/blob/m
 - Takeout **started** retained the three throws; takeout **finished** → `numThrows: 0`, throws omitted; status back to `Throw`.
 - Zero-dart false takeout possible while cams stabilize; `POST /api/reset` recovers without restart.
 
-### Live 2.1 throw plumbing gap
+### Live 2.1 throw plumbing (confirmed 2026-11-02)
 
-- `GET /api/throws` / `/api/numThrows` → **404**.
-- Idle `throws: []` with takeout in progress — cannot confirm whether stuck-dart throws still appear in `/api/state` without a live throw session.
-- inventwo explicitly: on **v2.0+**, local API “may still answer (connection, cameras, board status), but it **no longer provides throw data**”; cloud WebSocket required for throws.  
+- `GET /api/throws` / `/api/numThrows` → **404** (still).
+- **Stuck-dart `throws[]` still populates locally** on `GET /api/state` and on `ws://…/api/events` `{type:"state", data}` — inventwo’s “v2+ cloud-only throws” claim is **false for this 2.1.0 Board**.
+- Live visit: S18 → S20 → S14; after 3rd dart `status:"takeout"`, `event:"throwDetected"`. `numThrows` absent/null.
+- 2.1 throw objects are **flat** (`coordsX`/`coordsY`, `segmentName`/`segmentNumber`/`bed`/`multiplier`, plus `method` e.g. `UnanimousCam`, `bouncer`, `failed`) — not the nested 1.0.7 `{coords:{x,y}, segment:{…}}` shape.
+- Capture: [captures/06-live-throw-2026-11-02/](captures/06-live-throw-2026-11-02/).  
   Source: https://raw.githubusercontent.com/inventwo/ioBroker.autodarts/main/README.md
 
 **Madu must own its own Hit stream** — matching Autodarts *behaviour*, not their cloud bus.

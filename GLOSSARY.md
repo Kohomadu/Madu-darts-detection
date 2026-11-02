@@ -31,3 +31,7 @@ _Avoid_: Match UI, scoreboard, game screen
 **Calibration view**:
 The operator surface for camera device/resolution/fps settings and live feeds with Segment overlay used to complete Calibration.
 _Avoid_: Cameras page (except as casual shorthand)
+
+**Recording**:
+A saved visit from the live Board used for offline development: the three cameras’ frames around each stuck dart plus Autodarts’ local throw list as reference labels. A dev-time artefact only; the product never reads Autodarts at runtime.
+_Avoid_: Dataset (too generic), capture (reserve for raw API dumps)
