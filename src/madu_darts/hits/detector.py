@@ -17,7 +17,7 @@ import numpy as np
 
 from madu_darts.board.geometry import point_mm_to_segment
 from madu_darts.hits.config import FusionConfig, TipConfig
-from madu_darts.hits.fusion import fuse_points
+from madu_darts.hits.fusion import fuse_points, on_board
 from madu_darts.hits.hit import Hit, SlotVote
 from madu_darts.hits.tip import TipCandidate, locate_tip
 from madu_darts.motion import BoardModel, SettledChange
@@ -108,8 +108,19 @@ class HitDetector:
             log.debug("board_point failed for slot %s: %s", slot, exc)
             pending.rejected.add(slot)
             return None
+        xy = (float(mm[0]), float(mm[1]))
+        # Arms / body in the wide FOV project far outside the scoring disk (ticket 14).
+        if not on_board(xy, self.fusion_config.max_hit_radius_mm):
+            log.info(
+                "cam %s tip rejected: r=%.1f mm > max_hit_radius_mm=%.1f",
+                slot,
+                float(np.hypot(xy[0], xy[1])),
+                self.fusion_config.max_hit_radius_mm,
+            )
+            pending.rejected.add(slot)
+            return None
         pending.candidates[slot] = candidate
-        pending.points_mm[slot] = (float(mm[0]), float(mm[1]))
+        pending.points_mm[slot] = xy
         self.last_candidates[slot] = candidate
         return candidate
 

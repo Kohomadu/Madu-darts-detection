@@ -31,6 +31,7 @@ First milestone: local Python three-cam detection process + Calibration / Detect
 
 ## Fog
 
+- Off-Board arm/body motion ([14](issues/14-reject-offboard-motion.md) resolved): `max_hit_radius_mm=200` rejects per-cam / fused tips outside the disk before Hit commit (live false Hits were r≈390–740). Image-space Board ROI mask still optional if arms thrash the background.
 - Autofit suggested-20 vs ring mounts ([13](issues/13-autofit-rotate20-mount-bias.md) resolved): Board defaults `{0:10,1:4,2:16}` applied after every suggest; last Accepted offsets persisted to `captures/calibration_offsets.json`. Live 2026-11-02 observation (cam0 opposite / cam1 +4 left / cam2 +4 right) matched the 09 recording bind.
 - Homography-only vs later PnP/triangulation if doubles are noisy.
 - Learned tip detector only if 09’s classical gate is missed (decided classical-first) — gate narrowly missed on singles with n=18; [12](issues/12-learned-tip-detector.md) asks for more labelled data before any model.

@@ -55,12 +55,17 @@ class FusionConfig:
     collect_window_s: float = 0.4
     #: Minimum cams required to claim a Hit.
     min_cams: int = 1
+    #: Reject per-cam / fused tips farther from the bull than this (mm). Double outer is
+    #: 170 mm; ~200 leaves a little room for tip noise / just-outside misses, and kills
+    #: arm/body false Hits at r ≫ 300 (ticket 14).
+    max_hit_radius_mm: float = 200.0
 
     def to_api(self) -> dict[str, Any]:
         return {
             "agreeMm": self.agree_mm,
             "collectWindowS": self.collect_window_s,
             "minCams": self.min_cams,
+            "maxHitRadiusMm": self.max_hit_radius_mm,
         }
 
 

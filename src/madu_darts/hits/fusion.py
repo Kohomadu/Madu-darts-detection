@@ -33,6 +33,16 @@ def _dist(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.linalg.norm(a - b))
 
 
+def _radius_mm(xy: tuple[float, float] | np.ndarray) -> float:
+    p = np.asarray(xy, dtype=np.float64).reshape(2)
+    return float(np.hypot(p[0], p[1]))
+
+
+def on_board(xy: tuple[float, float] | np.ndarray, max_radius_mm: float) -> bool:
+    """True when the Board-plane tip is inside the hit gate radius (ticket 14)."""
+    return _radius_mm(xy) <= float(max_radius_mm)
+
+
 def fuse_points(
     points_mm: dict[int, tuple[float, float]],
     confidences: dict[int, float] | None = None,
@@ -44,14 +54,18 @@ def fuse_points(
     * best agreeing pair (others dropped) → ``Cam+1``
     * no agreement / one cam → ``BestCam`` (highest confidence)
 
-    The plain mean beats confidence weighting on the 07 recording, so
+    Tips outside ``max_hit_radius_mm`` are dropped before fusion (arm/body FOV
+    motion). The plain mean beats confidence weighting on the 07 recording, so
     ``confidences`` only break ties when a single cam must be chosen.
     """
     cfg = config or FusionConfig()
-    slots = sorted(points_mm)
+    max_r = float(cfg.max_hit_radius_mm)
+    in_board = {s: xy for s, xy in points_mm.items() if on_board(xy, max_r)}
+    off_board = tuple(sorted(s for s in points_mm if s not in in_board))
+    slots = sorted(in_board)
     if len(slots) < max(1, cfg.min_cams):
         return None
-    pts = {s: np.asarray(points_mm[s], dtype=np.float64) for s in slots}
+    pts = {s: np.asarray(in_board[s], dtype=np.float64) for s in slots}
     conf = confidences or {}
 
     def best_single() -> list[int]:
@@ -72,8 +86,10 @@ def fuse_points(
 
     stack = np.vstack([pts[s] for s in used])
     centre = stack.mean(axis=0)
+    if not on_board(centre, max_r):
+        return None
     spread = float(np.max(np.linalg.norm(stack - centre, axis=1))) if len(used) > 1 else 0.0
-    dropped = tuple(s for s in slots if s not in used)
+    dropped = tuple(sorted(set(off_board) | {s for s in slots if s not in used}))
     return FusedPoint(
         x_mm=float(centre[0]),
         y_mm=float(centre[1]),
@@ -84,4 +100,4 @@ def fuse_points(
     )
 
 
-__all__ = ["MAJORITY", "SINGLE", "UNANIMOUS", "FusedPoint", "fuse_points"]
+__all__ = ["MAJORITY", "SINGLE", "UNANIMOUS", "FusedPoint", "fuse_points", "on_board"]

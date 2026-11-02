@@ -94,6 +94,22 @@ def test_fuse_unanimous_majority_single() -> None:
     assert one is not None and one.method == SINGLE and one.spread_mm == 0.0
 
 
+def test_fuse_rejects_off_board_arm_tips() -> None:
+    """Ticket 14: tips at r ≫ double-outer must not become BestCam Hits."""
+    cfg = FusionConfig(agree_mm=15.0, max_hit_radius_mm=200.0)
+    # Live V3/V4 style: single-cam points hundreds of mm out.
+    assert fuse_points({0: (-550.0, 4.9)}, config=cfg) is None
+    assert fuse_points({0: (-391.0, -155.0), 1: (-640.0, -375.0), 2: (-431.0, -241.0)}, config=cfg) is None
+    # One on-Board tip among off-Board junk → BestCam on the good cam only.
+    mixed = {0: (-500.0, 0.0), 1: (0.0, 103.4), 2: (400.0, 200.0)}
+    fused = fuse_points(mixed, {0: 0.9, 1: 0.5, 2: 0.8}, config=cfg)
+    assert fused is not None and fused.used_slots == (1,) and fused.method == SINGLE
+    assert math.hypot(fused.x_mm, fused.y_mm) <= 200.0
+    # Just outside the double (real miss) still allowed.
+    near = fuse_points({0: (-23.8, 173.4)}, config=cfg)
+    assert near is not None and math.hypot(near.x_mm, near.y_mm) < 200.0
+
+
 def test_autodarts_segment_fields_match_live_vocabulary() -> None:
     # From the 07 recording: ('25','Single',25,1), ('T19','Triple',19,3), ('M20','Outside',20,0), ('D13','Double',13,2)
     ob = autodarts_segment_fields(point_mm_to_segment(-10.0, -6.0), -10.0, -6.0)

@@ -96,6 +96,31 @@ def test_second_dart_is_detected_against_committed_background() -> None:
     assert math.hypot(hit2.x_mm - second[0], hit2.y_mm - second[1]) <= 4.0
 
 
+def test_detector_rejects_off_board_tips_no_hit() -> None:
+    """Ticket 14: arm-sized change that projects far outside the Board must not score."""
+
+    def far_away(slot: int, px: tuple[float, float]) -> np.ndarray:
+        return np.array([-500.0 - 20.0 * slot, 50.0], dtype=np.float64)
+
+    board = BoardModel((0, 1, 2))
+    gate = MotionGate(board, MotionConfig(), slots=(0, 1, 2))
+    detector = HitDetector(far_away, board, slots=(0, 1, 2), fusion_config=FusionConfig(collect_window_s=0.2))
+    empty = {s: c.image for s, c in CAMS.items()}
+    board.capture_all(empty)
+    gate.set_enabled(True)
+    # Draw a dart-like blob so tip localization succeeds; Board mapping is forced off-disk.
+    stuck = {s: draw_dart(c.image, c.pixel_of_mm(0.0, 103.4)) for s, c in CAMS.items()}
+    t = 0.0
+    for _ in range(8):
+        t += 0.1
+        for event in gate.process_frames(stuck, t):
+            assert detector.offer(event, stuck[event.slot]) is None
+        assert detector.poll(t, latest_frames=stuck) is None
+    for event in gate.flush():
+        detector.offer(event, stuck[event.slot])
+    assert detector.poll(t + 1.0, force=True, latest_frames=stuck) is None
+
+
 def test_detector_waits_for_window_then_emits_single_cam() -> None:
     board = BoardModel((0, 1, 2))
     gate = MotionGate(board, MotionConfig(), slots=(0, 1, 2))
