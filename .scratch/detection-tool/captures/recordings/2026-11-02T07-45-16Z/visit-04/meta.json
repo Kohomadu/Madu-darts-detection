@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "visitIndex": 4,
+  "openedTMono": 7969.828,
+  "closedTMono": 7977.859,
+  "autodartsStatus": "takeout",
+  "autodartsEvent": "throwDetected",
+  "throws": [
+    {
+      "bed": "Single",
+      "bouncer": false,
+      "coordsX": 0.03862333584111144,
+      "coordsY": -0.02342594133121212,
+      "failed": false,
+      "method": "UnanimousCam",
+      "multiplier": 1,
+      "segmentName": "25",
+      "segmentNumber": 25
+    },
+    {
+      "bed": "SingleInner",
+      "bouncer": false,
+      "coordsX": -0.026991881539175033,
+      "coordsY": -0.1457994793147488,
+      "failed": false,
+      "method": "UnanimousCam",
+      "multiplier": 1,
+      "segmentName": "S19",
+      "segmentNumber": 19
+    },
+    {
+      "bed": "SingleOuter",
+      "bouncer": false,
+      "coordsX": -0.6590745050863925,
+      "coordsY": 0.29609774737741446,
+      "failed": false,
+      "method": "UnanimousCam",
+      "multiplier": 1,
+      "segmentName": "S14",
+      "segmentNumber": 14
+    }
+  ],
+  "darts": [
+    {
+      "index": 0,
+      "t_mono": 7969.828,
+      "t_recv": 1793605663.1842923,
+      "throw": {
+        "bed": "Single",
+        "bouncer": false,
+        "coordsX": 0.03862333584111144,
+        "coordsY": -0.02342594133121212,
+        "failed": false,
+        "method": "UnanimousCam",
+        "multiplier": 1,
+        "segmentName": "25",
+        "segmentNumber": 25
+      },
+      "frames": {
+        "0": [],
+        "1": [],
+        "2": []
+      }
+    },
+    {
+      "index": 1,
+      "t_mono": 7972.468,
+      "t_recv": 1793605665.8248386,
+      "throw": {
+        "bed": "SingleInner",
+        "bouncer": false,
+        "coordsX": -0.026991881539175033,
+        "coordsY": -0.1457994793147488,
+        "failed": false,
+        "method": "UnanimousCam",
+        "multiplier": 1,
+        "segmentName": "S19",
+        "segmentNumber": 19
+      },
+      "frames": {
+        "0": [],
+        "1": [],
+        "2": []
+      }
+    },
+    {
+      "index": 2,
+      "t_mono": 7974.906,
+      "t_recv": 1793605668.2621315,
+      "throw": {
+        "bed": "SingleOuter",
+        "bouncer": false,
+        "coordsX": -0.6590745050863925,
+        "coordsY": 0.29609774737741446,
+        "failed": false,
+        "method": "UnanimousCam",
+        "multiplier": 1,
+        "segmentName": "S14",
+        "segmentNumber": 14
+      },
+      "frames": {
+        "0": [],
+        "1": [],
+        "2": []
+      }
+    }
+  ]
+}

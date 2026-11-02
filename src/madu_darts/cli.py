@@ -1,4 +1,4 @@
-"""``madu-darts`` command line: ``serve`` runs the detection service + Calibration view."""
+"""``madu-darts`` command line: ``serve``, ``record``, ``replay``."""
 
 from __future__ import annotations
 
@@ -6,11 +6,13 @@ import argparse
 import logging
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 from madu_darts.cameras import DEFAULT_FPS, DEFAULT_HEIGHT, DEFAULT_LOCATIONS, DEFAULT_WIDTH, CameraConfig, IngestConfig, default_board_slots
 
 DEFAULT_HOST = "0.0.0.0"  # ADR 0003: reachable over the Board's Tailscale IP
 DEFAULT_PORT = 3181  # 3180 is Autodarts on the same Board machine
+DEFAULT_BOARD_URL = "http://100.118.240.5:3180"
 
 
 def _parse_override(text: str) -> tuple[str, int]:
@@ -20,22 +22,16 @@ def _parse_override(text: str) -> tuple[str, int]:
     return location, int(index)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="madu-darts", description="Madu Darts local detection tool")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    serve = sub.add_parser("serve", help="run the detection service and Calibration view")
-    serve.add_argument("--host", default=DEFAULT_HOST)
-    serve.add_argument("--port", type=int, default=DEFAULT_PORT)
-    serve.add_argument("--width", type=int, default=DEFAULT_WIDTH)
-    serve.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
-    serve.add_argument("--fps", type=int, default=DEFAULT_FPS)
-    serve.add_argument(
+def _add_ingest_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
+    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
+    parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
+    parser.add_argument(
         "--locations",
         default=",".join(DEFAULT_LOCATIONS),
         help="comma-separated USB locations for slots 0,1,2 (default %(default)s)",
     )
-    serve.add_argument(
+    parser.add_argument(
         "--index-override",
         action="append",
         default=[],
@@ -43,22 +39,52 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="LOCATION=INDEX",
         help="bind a USB location to an OpenCV index (Windows dev fallback); repeatable",
     )
-    serve.add_argument("--flip", action="append", default=[], type=int, metavar="SLOT", help="rotate a slot 180°; repeatable")
-    serve.add_argument(
+    parser.add_argument("--flip", action="append", default=[], type=int, metavar="SLOT", help="rotate a slot 180°; repeatable")
+    parser.add_argument(
         "--lock-exposure",
         action="store_true",
         help="settle under auto then lock exposure (off by default; can underexpose on V4L2)",
     )
-    serve.add_argument(
+    parser.add_argument(
         "--lock-white-balance",
         action="store_true",
         help="settle under auto then lock white balance (off by default)",
     )
-    serve.add_argument("--no-lock-exposure", action="store_true", help=argparse.SUPPRESS)
-    serve.add_argument("--no-lock-white-balance", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--no-lock-exposure", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--no-lock-white-balance", action="store_true", help=argparse.SUPPRESS)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="madu-darts", description="Madu Darts local detection tool")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    serve = sub.add_parser("serve", help="run the detection service and Calibration view")
+    serve.add_argument("--host", default=DEFAULT_HOST)
+    serve.add_argument("--port", type=int, default=DEFAULT_PORT)
+    _add_ingest_args(serve)
     serve.add_argument("--stream-fps", type=float, default=10.0, help="MJPEG rate for the Calibration view")
     serve.add_argument("--synthetic", action="store_true", help="use rendered Board views instead of USB cameras (UI dev)")
     serve.add_argument("--log-level", default="info")
+
+    record = sub.add_parser("record", help="record Autodarts visits + cam frames (dev tool)")
+    record.add_argument("--board", default=DEFAULT_BOARD_URL, help="Autodarts base URL (default %(default)s)")
+    record.add_argument("--out", type=Path, default=Path("recordings"), help="output root for sessions")
+    record.add_argument(
+        "--frames",
+        choices=("none", "local", "madu"),
+        default="none",
+        help="frame source: none=throws-only, local=USB via FramePump, madu=JPEG from --madu",
+    )
+    record.add_argument("--madu", default="http://127.0.0.1:3181", help="Madu :3181 base URL when --frames madu")
+    record.add_argument("--poll-hz", type=float, default=5.0)
+    record.add_argument("--sample-fps", type=float, default=10.0)
+    record.add_argument("--duration", type=float, default=None, help="stop after N seconds (default: until Ctrl-C)")
+    _add_ingest_args(record)
+    record.add_argument("--log-level", default="info")
+
+    replay = sub.add_parser("replay", help="shadow-compare a recording through the Madu pipeline")
+    replay.add_argument("recording", type=Path, help="path to a session directory (contains visit-*)")
+    replay.add_argument("--log-level", default="info")
     return parser
 
 
@@ -80,6 +106,41 @@ def ingest_config_from_args(args: argparse.Namespace) -> IngestConfig:
     return IngestConfig(slots=slots, capture=capture, location_index_overrides=dict(args.index_override))
 
 
+def _frame_source_from_args(args: argparse.Namespace):
+    from madu_darts.record.frames import LocalPumpFrameSource, MaduFeedFrameSource, NullFrameSource
+
+    if args.frames == "local":
+        return LocalPumpFrameSource(ingest_config_from_args(args), fps=args.sample_fps)
+    if args.frames == "madu":
+        return MaduFeedFrameSource(args.madu)
+    return NullFrameSource()
+
+
+def _cmd_record(args: argparse.Namespace) -> int:
+    from madu_darts.record.board_client import BoardClient
+    from madu_darts.record.recorder import VisitRecorder
+
+    board = BoardClient(args.board)
+    recorder = VisitRecorder(
+        board,
+        args.out,
+        frames=_frame_source_from_args(args),
+        sample_fps=args.sample_fps,
+        poll_hz=args.poll_hz,
+    )
+    session = recorder.run(duration_s=args.duration)
+    logging.getLogger("madu_darts").info("wrote recording session %s", session)
+    return 0
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    from madu_darts.replay import format_comparison_table, replay
+
+    rows = replay(args.recording)
+    print(format_comparison_table(rows))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=args.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -99,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
         logging.getLogger("madu_darts").info("Calibration view on http://%s:%d/", args.host, args.port)
         uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
         return 0
+    if args.command == "record":
+        return _cmd_record(args)
+    if args.command == "replay":
+        return _cmd_replay(args)
     return 2
 
 

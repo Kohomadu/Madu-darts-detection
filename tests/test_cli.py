@@ -44,6 +44,18 @@ def test_synthetic_flag_parses() -> None:
     assert build_parser().parse_args(["serve"]).synthetic is False
 
 
+def test_record_and_replay_subcommands_parse() -> None:
+    rec = build_parser().parse_args(
+        ["record", "--board", "http://board:3180", "--out", "recordings", "--frames", "none"]
+    )
+    assert rec.command == "record"
+    assert rec.board == "http://board:3180"
+    assert rec.frames == "none"
+    rep = build_parser().parse_args(["replay", "recordings/session"])
+    assert rep.command == "replay"
+    assert str(rep.recording).replace("\\", "/").endswith("recordings/session")
+
+
 def test_bad_override_and_location_count_are_rejected() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(["serve", "--index-override", "nonsense"])

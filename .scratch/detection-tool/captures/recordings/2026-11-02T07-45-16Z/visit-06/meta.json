@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "visitIndex": 6,
+  "openedTMono": 8021.328,
+  "closedTMono": 8034.593,
+  "autodartsStatus": "throw",
+  "autodartsEvent": "throwDetected",
+  "throws": [
+    {
+      "bed": "SingleInner",
+      "bouncer": false,
+      "coordsX": 0.1936242172666025,
+      "coordsY": 0.2815537097456793,
+      "failed": false,
+      "method": "UnanimousCam",
+      "multiplier": 1,
+      "segmentName": "S18",
+      "segmentNumber": 18
+    }
+  ],
+  "darts": [
+    {
+      "index": 0,
+      "t_mono": 8021.328,
+      "t_recv": 1793605714.679736,
+      "throw": {
+        "bed": "SingleInner",
+        "bouncer": false,
+        "coordsX": 0.1936242172666025,
+        "coordsY": 0.2815537097456793,
+        "failed": false,
+        "method": "UnanimousCam",
+        "multiplier": 1,
+        "segmentName": "S18",
+        "segmentNumber": 18
+      },
+      "frames": {
+        "0": [],
+        "1": [],
+        "2": []
+      }
+    }
+  ]
+}

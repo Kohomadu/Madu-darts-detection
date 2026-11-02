@@ -193,6 +193,7 @@ Evidence notes ([EVIDENCE.md](https://github.com/jonaswre/autodarts-nixos/blob/m
 - **Stuck-dart `throws[]` still populates locally** on `GET /api/state` and on `ws://…/api/events` `{type:"state", data}` — inventwo’s “v2+ cloud-only throws” claim is **false for this 2.1.0 Board**.
 - Live visit: S18 → S20 → S14; after 3rd dart `status:"takeout"`, `event:"throwDetected"`. `numThrows` absent/null.
 - 2.1 throw objects are **flat** (`coordsX`/`coordsY`, `segmentName`/`segmentNumber`/`bed`/`multiplier`, plus `method` e.g. `UnanimousCam`, `bouncer`, `failed`) — not the nested 1.0.7 `{coords:{x,y}, segment:{…}}` shape.
+- **`coordsX/Y` normalisation:** Board-plane mm ÷ outer-double radius **170 mm** (`DOUBLE_OUTER_MM`). Live S18/S20/S14 radii land in the matching beds via `point_mm_to_segment` after `* 170`. See ticket [07](issues/07-visit-recorder-shadow-compare.md) / `madu_darts.record.meta.COORDS_NORM_RADIUS_MM`.
 - Capture: [captures/06-live-throw-2026-11-02/](captures/06-live-throw-2026-11-02/).  
   Source: https://raw.githubusercontent.com/inventwo/ioBroker.autodarts/main/README.md
 

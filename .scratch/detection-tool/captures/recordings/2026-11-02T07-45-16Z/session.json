@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "2026-11-02T07-45-16Z",
+  "boardUrl": "http://100.118.240.5:3180",
+  "calibrationRef": "calibration.json",
+  "coordsNormRadiusMm": 170.0,
+  "createdTWall": 1793605516.6121185,
+  "notes": ""
+}

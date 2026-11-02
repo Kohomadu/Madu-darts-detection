@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Type: task
 Model: auto
 Blocked by: 04, 06
@@ -34,3 +34,23 @@ Primary: [research-autodarts-behaviour.md](../research-autodarts-behaviour.md) �
 
 - Do not depend on Autodarts at runtime in the product path (ADR 0001) — recorder/compare is a **dev tool** only.
 - Beware frame/throw time skew: record monotonic timestamps on both sides and the WS receive time.
+
+## Answer
+
+Shipped the dev-only recorder + shadow-compare harness; live session captured; coords norm derived.
+
+### Code
+- `madu_darts.record`: `FrameRingBuffer`, `VisitSegmenter` (`throws[]` length ↑ → dart, empty → visit close), `VisitMeta`/`RecordingMeta`, `VisitRecorder`, HTTP poll `BoardClient` (~5 Hz), frame sources `none` / `local` (FramePump) / `madu` (JPEG feeds).
+- `madu_darts.replay`: `replay(recording) -> list[DartComparison]`, `EchoAutodartsPipeline` stub, comparison table CLI.
+- CLI: `madu-darts record --board … --out … --frames none|local|madu`, `madu-darts replay <session>`.
+- Unit tests: ring buffer, visit segmentation, meta schema, recorder write path, echo replay, CLI parse. Full suite 226 passed.
+
+### Coords
+Autodarts `coordsX/Y` = Board-plane mm ÷ **170** (`DOUBLE_OUTER_MM`). Documented in `COORDS_NORM_RADIUS_MM` + research §2.2; verified against live S18/S20/S14 beds.
+
+### Live recording
+[captures/recordings/2026-11-02T07-45-16Z/](../captures/recordings/2026-11-02T07-45-16Z/) — **10 visits / 28 darts** incl. **D16**, **T4**, outer bull `25`, misses. Autodarts ellipses saved as `calibration.json`.  
+`madu-darts replay` → **28/28 (100%)** agreement with echo stub.
+
+### Gap (frames)
+Session recorded from Windows with `--frames none` (Autodarts holds USB cams; Madu `:3181` was down). Visit trees have empty `cam{0,1,2}/`. Re-record on the Board with `--frames local` (or `--frames madu` once `:3181` owns feeds) before tickets 08–09 need real pixels; labels + coords are enough for stub replay and state-machine work.
