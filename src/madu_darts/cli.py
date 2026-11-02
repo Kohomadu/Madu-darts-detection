@@ -169,6 +169,11 @@ def _cmd_replay(args: argparse.Namespace) -> int:
         pipeline = MaduPipeline(rotate_offsets=offsets)
     rows = replay(args.recording, pipeline)
     print(format_comparison_table(rows))
+    if isinstance(pipeline, MaduPipeline):
+        from madu_darts.replay import format_turn_table
+
+        print()
+        print(format_turn_table(pipeline.visit_traces))
     return 0
 
 

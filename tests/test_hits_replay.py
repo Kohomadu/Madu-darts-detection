@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from madu_darts.replay import MaduPipeline, replay, summarize
+from madu_darts.replay import MaduPipeline, format_turn_table, replay, summarize
 
 RECORDING = (
     Path(__file__).resolve().parents[1]
@@ -41,3 +41,21 @@ def test_madu_pipeline_accuracy_floor_on_recording() -> None:
     bind = pipeline.bind(RECORDING)
     assert set(bind.cals) == {0, 1, 2}
     assert bind.offsets == {0: 10, 1: 4, 2: 16}
+
+
+@pytest.mark.skipif(not _has_pixels(RECORDING), reason="07 recording JPEGs not present locally")
+def test_turn_sequence_matches_autodarts_per_visit() -> None:
+    """Ticket 10: throws[] grows 1→2→3 with Autodarts' status/event, then empties on takeout."""
+    pipeline = MaduPipeline(rotate_offsets={0: 10, 1: 4, 2: 16})
+    replay(RECORDING, pipeline)
+    traces = pipeline.visit_traces
+    assert len(traces) == 8
+    for trace in traces:
+        assert trace.ok, f"visit {trace.visit_index}: {trace.sequence()}"
+        assert (trace.status_at_close.value, trace.event_at_close.value) == ("takeout", "throwDetected")
+        counts = [tr.num_hits for tr in trace.transitions if tr.event.value == "throwDetected"]
+        assert counts == [1, 2, 3]
+        events = [tr.event.value for tr in trace.transitions]
+        assert events[-2:] == ["takeoutStarted", "takeoutFinished"]
+        assert "bounceOut" not in events
+    print(format_turn_table(traces))

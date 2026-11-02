@@ -155,7 +155,8 @@ def test_motion_config_and_state_endpoints() -> None:
         assert motion["cams"]["0"]["phase"] == "idle"
 
         hits = client.get("/api/state/hits").json()
-        assert hits == {"throws": [], "hits": [], "pending": False}
+        assert hits["throws"] == [] and hits["hits"] == [] and hits["pending"] is False
+        assert hits["running"] is False and hits["status"] == "throw"
         assert client.post("/api/state/hits/clear").json()["throws"] == []
 
         for slot, cam in CAMS.items():
@@ -170,6 +171,39 @@ def test_motion_config_and_state_endpoints() -> None:
 
         client.post("/api/calibration/reset")
         assert client.get("/api/state/motion").json()["enabled"] is False
+
+
+def test_turn_controls_and_state_endpoints() -> None:
+    client, service, _ = make_client()
+    with client:
+        assert client.get("/api/config").json()["turn"]["maxHits"] == 3
+        assert client.put("/api/start").status_code == 409  # Calibration not accepted yet
+        turn = client.get("/api/state/turn").json()
+        assert turn["running"] is False and turn["status"] == "throw" and turn["throws"] == []
+
+        for slot, cam in CAMS.items():
+            for _ in range(cam.correct_offset):
+                client.post(f"/api/calibration/{slot}/rotate-left")
+        assert client.post("/api/calibration/accept").status_code == 200
+
+        turn = client.get("/api/state/turn").json()
+        assert turn["running"] is True and turn["event"] == "started" and turn["numThrows"] == 0
+        assert set(turn) >= {"connected", "running", "status", "event", "throws", "hits", "standby", "bounceOuts", "version"}
+
+        stopped = client.put("/api/stop").json()
+        assert stopped["running"] is False and stopped["event"] == "stopped"
+        assert service.motion_gate.enabled is False
+
+        started = client.post("/api/start").json()  # POST alias
+        assert started["running"] is True and started["event"] == "started"
+        assert service.motion_gate.enabled is True
+
+        reset = client.post("/api/reset").json()
+        assert reset["event"] == "reset" and reset["status"] == "throw" and reset["running"] is True
+
+        client.post("/api/calibration/reset")
+        turn = client.get("/api/state/turn").json()
+        assert turn["running"] is False and client.get("/api/state/motion").json()["enabled"] is False
 
 
 def test_accept_flow_and_revocation() -> None:

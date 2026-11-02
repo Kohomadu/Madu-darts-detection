@@ -103,14 +103,37 @@ def create_app(service: DetectionService) -> FastAPI:
     def motion_state() -> dict[str, Any]:
         return service.motion_state()
 
+    @app.get("/api/state/turn")
+    def turn_state() -> dict[str, Any]:
+        """Autodarts-shaped ``{running, status, event, throws}`` + Madu Turn debug fields."""
+        return service.turn_state()
+
     @app.get("/api/state/hits")
     def hits_state() -> dict[str, Any]:
         return service.hits_state()
 
     @app.post("/api/state/hits/clear")
     def clear_hits() -> dict[str, Any]:
-        service.clear_hits()
-        return service.hits_state()
+        return service.reset_turn()
+
+    # --- detector controls (Autodarts: PUT /api/start|stop, POST /api/reset) ---
+
+    @app.api_route("/api/start", methods=["PUT", "POST"])
+    def start_detection() -> dict[str, Any]:
+        if not session.accepted:
+            raise HTTPException(status_code=409, detail="calibration not accepted")
+        try:
+            return service.start_detection()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.api_route("/api/stop", methods=["PUT", "POST"])
+    def stop_detection() -> dict[str, Any]:
+        return service.stop_detection()
+
+    @app.post("/api/reset")
+    def reset_turn() -> dict[str, Any]:
+        return service.reset_turn()
 
     @app.get("/api/config")
     def api_config() -> dict[str, Any]:
