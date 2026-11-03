@@ -150,8 +150,10 @@ class DetectionService:
                 s: self.session.get(s).status is FitStatus.PASS for s in self.session.slots
             },
         )
-        #: Calibration residual dots (ticket 19); default off for a clean spider.
-        self._show_residuals = False
+        #: Calibration residual dots (ticket 19); default on so far-double soft spots show (ticket 34).
+        self._show_residuals = True
+        #: Detection tip / fused-Hit overlay on cam streams (ticket 30); off by default.
+        self._show_hit_debug = False
         self.live = LiveStore(
             root=None if self._config.capture_root is None else Path(self._config.capture_root),
             max_visits=self._config.max_history,
@@ -202,6 +204,17 @@ class DetectionService:
 
     def set_show_residuals(self, value: bool) -> None:
         self._show_residuals = bool(value)
+
+    @property
+    def show_hit_debug(self) -> bool:
+        return self._show_hit_debug
+
+    def set_show_hit_debug(self, value: bool) -> None:
+        self._show_hit_debug = bool(value)
+
+    def committed_hits(self) -> list[Any]:
+        """Hits currently on the Turn (for cam tip overlays)."""
+        return list(self.turn.hits)
 
     def stop(self) -> None:
         with self._lock:
@@ -343,7 +356,7 @@ class DetectionService:
     def recheck(self) -> dict[str, Any]:
         """``POST /api/recheck``: mid-Turn classical re-detect vs empty refs (ticket 17)."""
         from madu_darts.calibration.model import FitStatus
-        from madu_darts.hits.recheck import recheck_hits
+        from madu_darts.hits import recheck_hits
 
         self.session.require_accepted()
         if not self.turn.running:
@@ -380,33 +393,30 @@ class DetectionService:
 
     def override_hit(self, index: int, body: dict[str, Any]) -> dict[str, Any]:
         """``PATCH /api/state/hits/{index}``: manual Segment / Board-mm correction (ticket 18)."""
-        from madu_darts.board import point_mm_to_segment, segment_name_to_mm
-        from madu_darts.hits.hit import Hit
+        from madu_darts.hits import resolve_manual
 
         hits = self.turn.hits
         if not hits:
             raise RuntimeError("no Hits to override")
         if index < 0 or index >= len(hits):
             raise IndexError(f"hit index {index} out of range")
+        t = time.monotonic()
         if "xMm" in body and "yMm" in body:
-            x_mm, y_mm = float(body["xMm"]), float(body["yMm"])
+            hit = resolve_manual(
+                x_mm=float(body["xMm"]),
+                y_mm=float(body["yMm"]),
+                previous=hits[index],
+                t_mono=t,
+            )
         elif "segmentName" in body and body["segmentName"]:
-            x_mm, y_mm = segment_name_to_mm(str(body["segmentName"]))
+            hit = resolve_manual(
+                segment_name=str(body["segmentName"]),
+                previous=hits[index],
+                t_mono=t,
+            )
         else:
             raise ValueError("body needs segmentName or xMm+yMm")
-        segment = point_mm_to_segment(x_mm, y_mm)
-        old = hits[index]
-        hit = Hit(
-            x_mm=x_mm,
-            y_mm=y_mm,
-            segment=segment,
-            method="Manual",
-            confidence=1.0,
-            t_mono=time.monotonic(),
-            slot_votes=old.slot_votes,
-            spread_mm=0.0,
-        )
-        self.turn.override_hit(index, hit, time.monotonic())
+        self.turn.override_hit(index, hit, t)
         return self.api_state()
 
     def hits(self) -> list[Hit]:

@@ -7,8 +7,29 @@ Issues and specs for this repo live as markdown files in `.scratch/`.
 - One feature per directory: `.scratch/<feature-slug>/`
 - The spec is `.scratch/<feature-slug>/spec.md`
 - Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01`, never a single combined tickets file
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
+- Triage / workflow state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md`, plus the workflow values below)
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
+
+## Kanban (detection-tool and other efforts)
+
+Refresh the board from ticket files:
+
+```text
+madu-darts kanban
+madu-darts kanban --effort detection-tool
+```
+
+That writes `.scratch/<effort>/kanban.md`. Columns are derived from `Status:` and whether `Blocked by:` tickets are `resolved`:
+
+| Column | Status values |
+| --- | --- |
+| To do | `ready-for-agent`, `ready-for-human`, `needs-triage`, `needs-info` (and unblocked) |
+| Blocked | any open status whose blockers are not all `resolved` |
+| Doing | `claimed` |
+| In testing | `in-testing` — implementation in; live Board / human check pending |
+| Done | `resolved`, `wontfix` |
+
+After an agent lands code that still needs a live Board check, set `Status: in-testing` (not `resolved`). Move to `resolved` only after that check (or an explicit decision that offline proof is enough).
 
 ## When a skill says "publish to the issue tracker"
 

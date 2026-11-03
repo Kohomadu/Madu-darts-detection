@@ -1,27 +1,14 @@
-Status: needs-triage
+# 12: Decide the tip only after the spider is honest
+
+**What to build:** Decide whether the classical tip is enough once Scoring uses the 21 faces and Accept uses the 35 gate. A learned tip is in scope only for misses that sit more than a wire-width away from every wire. Misses on the wire are not a reason to train one.
+
+**Blocked by:** 26, 35
+
+**Status:** ready-for-agent
+
 Type: task
 Model: premium
-Blocked by: 09, 26
 
-# Follow-up: close the singles gap (more labelled data first, learned tip only if it persists)
-
-**Sliced:** data/scorecard → [26](26-labelled-corpus-100.md); ONNX tip-in-crop → [27](27-onnx-tip-in-crop.md). Keep this ticket as the umbrella decision record.
-
-Opened by [09](09-tip-localization-fusion.md) because the classical tip + fusion chain landed at **83 % singles** (15/18) against the ≥ 90 % gate on the single 24-dart recording, while doubles/trebles (3/3), bulls (2/2) and median error (3.76 mm ≤ 4) passed.
-
-## What 09 found
-
-- Every disagreement is at Autodarts' own noise floor: three wire-straddles where Autodarts' label is ≤ 2.3 mm from a wire, one occlusion (previous dart's flight hides the new tip in one cam).
-- A 36-point parameter sweep plateaus at 20–21/24 — heuristics are saturated; the ticket rule says stop tuning.
-- Per-cam error is 3–6.5 mm; cam 2 is the worst and also has the worst autofit RMS (1.48 mm).
-- Autodarts' labels imply treble-inner ≤ 97.0 mm vs Madu WDF 99.4 (see map Fog).
-
-## Decide (human)
-
-1. **Record more** (cheap, Auto): 5–10 more sessions with `madu-darts record --frames autodarts`, aiming for ≥ 100 darts incl. ≥ 20 doubles/trebles and a few bounce-outs/takeouts. Re-run `madu-darts replay`; if singles ≥ 90 % on the larger set, close this as resolved with no model.
-2. **Occlusion-aware fusion** (small, Auto): when a cam's tip ends inside a previously committed dart's footprint, down-weight / drop that cam before the mean.
-3. **Learned tip detector** (premium, only if 1 fails): small ONNX keypoint/heatmap model on 1280×720 crops around the settled bbox, trained on Autodarts-labelled recordings (tip px = Autodarts mm → `board_mm_to_image`). Keep the classical path as fallback and the fusion/Hit API unchanged.
-
-## Done when
-
-- Singles ≥ 90 % and doubles/trebles ≥ 80 % on a ≥ 100-dart labelled set, median ≤ 4 mm; or an explicit decision recorded here that the classical chain is good enough for the first Detection view milestone.
+- [ ] The answer uses the 26 scorecard, split into ring miss, neighbour, and far-from-wire
+- [ ] Misses within the wire thickness do not justify a learned tip
+- [ ] Either the classical tip stays, with that written here, or 27 is the next step and the miss list is in the answer

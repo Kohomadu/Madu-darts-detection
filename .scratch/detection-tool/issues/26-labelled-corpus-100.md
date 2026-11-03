@@ -1,22 +1,14 @@
-Status: ready-for-agent
+# 26: Labelled corpus — ring misses separated from tip misses
+
+**What to build:** A labelled corpus of at least 100 darts, including at least 20 in a double or treble ring, scored with the 33 report so a ring miss is not counted as a tip failure. Frames stay out of git. Someone has to throw the darts.
+
+**Blocked by:** 33
+
+**Status:** ready-for-human
+
 Type: task
-Model: auto
-Blocked by: 07, 09
+Model: human+auto
 
-# Labelled corpus ≥100 darts — scorecard before any learned tip
-
-Ticket 12: classical tip saturated on n=24; decide with more data whether ONNX is needed. This ticket is the data + scorecard work only.
-
-## Scope
-
-1. Record 5–10 sessions (`madu-darts record --frames autodarts` or Board live captures with known truth), aiming for **≥ 100 darts**, including ≥ 20 doubles/trebles and some bounce-outs/takeouts if possible.
-2. Replay / shadow-compare scorecard: singles %, D/T %, median mm, wire-straddle counts.
-3. Update ticket 12 + map Fog with go/no-go for [27](27-onnx-tip-in-crop.md).
-4. Store meta under `captures/recordings/`; large JPEGs stay gitignored.
-
-Out of scope: training a model; changing fusion heuristics (24/25 can land in parallel).
-
-## Done when
-
-- Scorecard checked into the ticket Answer (table + recording paths).
-- Explicit recommendation: classical enough / need 24–25 first / proceed to 27.
+- [ ] The answer lists the Recording paths and the 33 scorecard table
+- [ ] At least 100 darts, at least 20 in a double or treble ring
+- [ ] The answer says whether the remaining misses are on a wire or far from every wire, and points 12 at that split

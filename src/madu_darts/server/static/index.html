@@ -62,7 +62,7 @@
       <button class="danger" id="reset">Reset</button>
       <button id="auto-all">Auto-calibrate all</button>
       <label style="flex-direction:row;align-items:center;gap:6px;color:var(--fg);font-size:13px">
-        <input type="checkbox" id="residuals"> Residuals
+        <input type="checkbox" id="residuals" checked> Residuals
       </label>
       <span id="blockers"></span>
     </div>
@@ -159,11 +159,16 @@
   }
 
   function fitLine(c) {
-    const rms = c.rmsMm != null ? c.rmsMm.toFixed(2) : '?';
-    let text = `RMS ${rms} mm`;
+    // Ticket 34: badge millimetres are far-double all-sample RMS when present.
+    const display = c.displayRmsMm != null ? c.displayRmsMm
+      : (c.farDouble && c.farDouble.rmsMm != null ? c.farDouble.rmsMm : c.rmsMm);
+    const label = (c.farDouble && c.farDouble.rmsMm != null) ? 'far dbl' : 'RMS';
+    let text = display != null ? `${label} ${display.toFixed(2)} mm` : `${label} ?`;
     if (c.farDouble && c.farDouble.maxMm != null) {
-      const farRms = c.farDouble.rmsMm != null ? c.farDouble.rmsMm.toFixed(2) : '?';
-      text += ` · far dbl ${farRms} (max ${c.farDouble.maxMm.toFixed(2)})`;
+      text += ` (max ${c.farDouble.maxMm.toFixed(2)})`;
+    }
+    if (c.rmsMm != null && c.farDouble && c.farDouble.rmsMm != null) {
+      text += ` · inlier ${c.rmsMm.toFixed(2)}`;
     }
     if (c.maxResidualMm != null) text += ` · max ${c.maxResidualMm.toFixed(2)}`;
     text += ` · offset ${c.rotateOffset}`;
@@ -173,7 +178,12 @@
   function render(snap) {
     for (const slot of slots) {
       const c = snap.cams[String(slot)]; const el = tiles[slot]; if (!c || !el) continue;
-      const badge = $('[data-badge]', el); badge.className = `badge ${c.status}`; badge.textContent = c.status.toUpperCase();
+      const badge = $('[data-badge]', el); badge.className = `badge ${c.status}`;
+      const badgeMm = c.displayRmsMm != null ? c.displayRmsMm
+        : (c.farDouble && c.farDouble.rmsMm != null ? c.farDouble.rmsMm : null);
+      badge.textContent = badgeMm != null
+        ? `${c.status.toUpperCase()} ${badgeMm.toFixed(2)}`
+        : c.status.toUpperCase();
       $('[data-rms]', el).textContent = c.hasFit ? fitLine(c) + (c.bindLocked ? ' · saved' : '') : '';
       $('[data-err]', el).textContent = c.error || '';
       el.dataset.bindLocked = c.bindLocked ? '1' : '0';

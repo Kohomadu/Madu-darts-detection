@@ -1,21 +1,21 @@
-Status: ready-for-agent
+# 30: Camera overlays — tip votes and which side of the wire
+
+**What to build:** On the Detection view, each camera shows its tip, whether that vote was kept, which side of the nearest ring wire it fell on, and the fused Hit projected back. The overlay is off unless the operator turns it on.
+
+**Blocked by:** None (can start immediately).
+
+**Status:** in-testing
+
 Type: task
 Model: auto
-Blocked by: 11, 09
 
-# Cam MJPEG overlays — tip votes + fused Hit
+- [x] With three stuck darts, the operator can see which camera was dropped and which side of the ring each kept vote is on
+- [x] Turning the overlay off leaves the stream as it is today
+- [x] It works on the live view or on the last capture preview
 
-Debugging overlay vs tip disagreements today requires downloading capture packs. Draw per-cam tip votes and the fused Hit on Detection Vision tiles / cam streams when debug is on.
+## Answer
 
-## Scope
-
-1. Overlay tip px (and optionally axis) per cam; mark used vs dropped votes; draw fused Board point projected back to each cam.
-2. Toggle via query flag or Detection UI checkbox (default off for performance).
-3. Works on live MJPEG and/or last capture preview.
-
-Out of scope: Calibration spiderweb (already separate); editing Hits on the cam image (18 is Board SVG).
-
-## Done when
-
-- With three stuck darts, operator can see which cam pulled a wire-straddle.
-- Answer includes one live screenshot.
+- `draw_hit_debug` draws keep (green) / drop (orange) tip votes and a blue fused cross; labels include Segment and ring side (`inside` / `outside` / `on`).
+- Detection Vision has a Tip / Hit overlay checkbox; streams use `/stream/{slot}.mjpg?hitDebug=1`. Default streams stay unchanged when the toggle is off.
+- `SlotVote.to_api` includes `ringSide` for the motion-tile text and for 36 later.
+- `PATCH /api/calibration/display` accepts `showHitDebug`.

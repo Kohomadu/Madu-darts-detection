@@ -268,6 +268,7 @@ def test_snapshot_is_json_shaped() -> None:
         "status": "pass",
         "rotateOffset": 1,
         "rmsMm": 0.5,
+        "displayRmsMm": 0.5,
         "nInliers": None,
         "nPoints": None,
         "coverage": None,

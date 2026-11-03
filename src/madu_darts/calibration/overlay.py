@@ -68,10 +68,22 @@ def _twenty_wedge_mm(r_in: float = OUTER_BULL_RADIUS_MM, r_out: float = DOUBLE_O
     return np.asarray(outer + inner, dtype=np.float64)
 
 
+def _display_rms_mm(cal: CamCalibration) -> tuple[float | None, str]:
+    """Primary badge millimetres: far-double all-sample RMS when known (ticket 34)."""
+    if cal.residuals is not None and cal.homography is not None:
+        far = summarize_residuals(cal.residuals, cal.homography, cal.rotate_offset).get("farDouble")
+        if far is not None and far.get("rmsMm") is not None:
+            return float(far["rmsMm"]), " far dbl"
+    if cal.rms_mm is not None:
+        return float(cal.rms_mm), ""
+    return None, ""
+
+
 def _status_text(cal: CamCalibration) -> str:
-    if cal.rms_mm is None:
+    display, tag = _display_rms_mm(cal)
+    if display is None:
         return cal.status.value.upper()
-    text = f"{cal.status.value.upper()}  {cal.rms_mm:.2f} mm"
+    text = f"{cal.status.value.upper()}  {display:.2f} mm{tag}"
     if cal.n_inliers is not None and cal.n_points is not None:
         text += f"  {cal.n_inliers}/{cal.n_points}"
     return text

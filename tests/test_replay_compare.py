@@ -70,3 +70,14 @@ def test_autodarts_coords_norm_is_outer_double_radius() -> None:
     seg = point_mm_to_segment(x_mm, y_mm)
     assert seg.name == "S18"
     assert seg.bed == "SingleOuter"
+
+
+def test_echo_table_reports_agree_class_and_wire_distances(tmp_path: Path) -> None:
+    recording = _write_fixture(tmp_path)
+    rows = replay(recording, EchoAutodartsPipeline())
+    assert all(r.miss_class == "agree" for r in rows)
+    assert all(r.dist_ring_wire_mm is not None and r.dist_sector_wire_mm is not None for r in rows)
+    table = format_comparison_table(rows)
+    assert "ring_miss: 0" in table
+    assert "neighbour: 0" in table
+    assert "agree" in table

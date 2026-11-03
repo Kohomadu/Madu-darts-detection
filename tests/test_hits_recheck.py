@@ -9,7 +9,15 @@ import numpy as np
 from madu_darts.board import point_mm_to_segment, segment_name_to_mm
 from madu_darts.calibration.homography import apply_homography
 from madu_darts.calibration.synthetic import synthetic_camera
-from madu_darts.hits import RECHECK_METHOD, FusionConfig, Hit, TipConfig, locate_tips_vs_empty, recheck_hits
+from madu_darts.hits import (
+    RECHECK_METHOD,
+    FusionConfig,
+    Hit,
+    TipConfig,
+    locate_tips_vs_empty,
+    recheck_hits,
+    resolve_manual,
+)
 from madu_darts.hits.recheck import _merge_keeping_strong_priors, _should_keep_previous
 from madu_darts.hits.tip import TipCandidate
 from madu_darts.hits.hit import SlotVote
@@ -137,20 +145,29 @@ def test_replace_hits_emits_recheck_and_keeps_cardinality() -> None:
 def test_override_hit_sets_manual_method() -> None:
     sim = Sim()
     sim.throw([T20])
-    x_mm, y_mm = segment_name_to_mm("D20")
-    hit = Hit(
-        x_mm=x_mm,
-        y_mm=y_mm,
-        segment=point_mm_to_segment(x_mm, y_mm),
-        method="Manual",
-        confidence=1.0,
-        t_mono=sim.t,
-    )
+    prior = sim.ctrl.hits[0]
+    hit = resolve_manual(segment_name="D20", previous=prior, t_mono=sim.t)
     tr = sim.ctrl.override_hit(0, hit, sim.t + 0.1)
     assert tr.event == TurnEvent.OVERRIDE
     assert sim.ctrl.hits[0].method == "Manual"
     assert sim.ctrl.hits[0].segment.name == "D20"
     assert sim.ctrl.hits[0].autodarts_segment_name == "D20"
+    assert sim.ctrl.hits[0].slot_votes == prior.slot_votes
+
+
+def test_recheck_tip_fork_deleted() -> None:
+    """Recheck must not own a second tip-from-component-points implementation."""
+    from pathlib import Path
+
+    import madu_darts.hits.recheck as recheck_mod
+    import madu_darts.hits.tip as tip_mod
+
+    assert not hasattr(recheck_mod, "_tip_from_component_points")
+    assert not hasattr(recheck_mod, "tip_from_component_points")
+    assert hasattr(tip_mod, "tip_from_component_points")
+    source = Path(recheck_mod.__file__).read_text(encoding="utf-8")
+    assert "cv2.fitLine" not in source
+    assert "locate_tips_vs_empty" in source
 
 
 def test_segment_name_to_mm_roundtrip_beds() -> None:

@@ -38,22 +38,37 @@ First milestone: local Python three-cam detection process + Calibration / Detect
 
 ### Overlay / Calibration backlog
 
-- Wire nudge ([20](issues/20-calib-wire-nudge.md), unblocked — 19 resolved).
-- Radii from labels ([21](issues/21-geometry-radii-from-labels.md)): WDF vs Autodarts-implied wire-centre radii.
-- Distortion k1/k2 ([22](issues/22-calib-distortion-k1k2.md), premium, blocked by 21).
-- Homography-only vs later PnP/triangulation if doubles stay noisy after 19–22.
-
-### Tip / fusion / learned
-
-- Labelled corpus ≥100 ([26](issues/26-labelled-corpus-100.md)) → go/no-go for ONNX tip-in-crop ([27](issues/27-onnx-tip-in-crop.md)); umbrella [12](issues/12-learned-tip-detector.md).
+Moved to the accuracy ladder below. PnP and triangulation stay deferred until 22’s far-double residual is still past a half-ring on a real Board.
 
 ### Product / reliability
 
-- Recheck confidence UI ([28](issues/28-recheck-confidence-ui.md)); sealed history edit ([29](issues/29-history-edit-sealed.md)); cam MJPEG tip overlays ([30](issues/30-detection-cam-overlays.md)).
+- Recheck confidence UI ([28](issues/28-recheck-confidence-ui.md)); sealed history edit ([29](issues/29-history-edit-sealed.md)).
 - Live takeout/standby tune ([31](issues/31-standby-takeout-live-tune.md)); Windows cam identity ([32](issues/32-windows-cam-identity.md)).
+
+### Architecture deepen (2026-11-03 review)
+
+- Hit claiming spec + tip-unify ticket: [../hit-claiming/spec.md](../hit-claiming/spec.md) (`ready-for-agent`).
+- Remaining review candidates (needs grilling / `/to-spec`): [../architecture-deepen/map.md](../architecture-deepen/map.md) — Binder, ScoringRuntime, Board observation, state choreography.
 
 ### Still open from earlier
 
 - Vision Recheck + Manual override ([17](issues/17-vision-recheck.md) / [18](issues/18-manual-hit-override.md), `ready-for-human`): shipped + Recheck stub hardening (`b57b116`); live human validation continues.
-- Calibration / D–T quality ([15](issues/15-calibration-quality-cam0-dt.md), `claimed`, **premium**): edge refine + honest coverage shipped; residual overlay is [19](issues/19-calib-residual-overlay.md); BestCam / fusion follow-ups → 24–25.
-- Suggested overlay-first order: **21 → 20 → 24+25 → 26 → (27?)** (19 done).
+- Calibration / D–T quality ([15](issues/15-calibration-quality-cam0-dt.md), resolved): edge refine shipped. The next bar is the accuracy ladder, not a tighter inlier RMS.
+
+## Kanban
+
+Live board: [kanban.md](kanban.md). Refresh with `madu-darts kanban`. Columns: To do / Blocked / Doing / In testing / Done. Status `in-testing` means code is in and the live Board check is pending (30, 33, 34 right now).
+
+## Accuracy ladder (2026-11-03)
+
+Evidence: [research-spider-calibration-accuracy.md](research-spider-calibration-accuracy.md). An 8 mm double or treble ring leaves 4 mm from its centre to a wire. Inlier RMS and a 99.9% area figure do not protect those Hits. The spider has to be right in millimetres on the foreshortened double, and the tip is a separate error.
+
+Frontier done 2026-11-03: [33](issues/33-replay-ring-scorecard.md) scorecard (07: 21/24, ring_miss 2, neighbour 1), [34](issues/34-calib-honest-far-double.md) far-double badge + nudge rescore, [30](issues/30-detection-cam-overlays.md) tip overlay toggle.
+
+Next: [21](issues/21-geometry-radii-from-labels.md) scoring-face radii (unblocked) → [22](issues/22-calib-distortion-k1k2.md) joint distortion → [35](issues/35-accept-half-bed.md) Accept at 2 mm / 4 mm (also needs 34) → [20](issues/20-calib-wire-nudge.md) drag the spider.
+
+Fusion: [36](issues/36-fusion-one-side-of-wire.md) (unblocked by 33+30; still needs 21).
+
+Tip: [26](issues/26-labelled-corpus-100.md) (unblocked, human throws) → [12](issues/12-learned-tip-detector.md) → [27](issues/27-onnx-tip-in-crop.md).
+
+[15](issues/15-calibration-quality-cam0-dt.md) is resolved. Its inlier-RMS pass is not this ladder’s gate.

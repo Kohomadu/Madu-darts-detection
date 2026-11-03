@@ -15,10 +15,10 @@ from typing import Any
 
 import numpy as np
 
-from madu_darts.board.geometry import point_mm_to_segment
+from madu_darts.hits.claiming import claim_settled
 from madu_darts.hits.config import FusionConfig, TipConfig
-from madu_darts.hits.fusion import fuse_points, occluded_slots, on_board
-from madu_darts.hits.hit import Hit, SlotVote
+from madu_darts.hits.fusion import occluded_slots, on_board
+from madu_darts.hits.hit import Hit
 from madu_darts.hits.tip import TipCandidate, locate_tip
 from madu_darts.motion import BoardModel, SettledChange
 
@@ -170,12 +170,13 @@ class HitDetector:
         )
         if occluded:
             log.info("occlusion drop candidates: slots %s", sorted(occluded))
-        fused = fuse_points(
+        hit = claim_settled(
             pending.points_mm,
-            {s: c.confidence for s, c in pending.candidates.items()},
-            self.fusion_config,
+            pending.candidates,
+            fusion_config=self.fusion_config,
             fit_ok=fit_ok,
             occluded=occluded,
+            t_mono=float(max(c for c in [pending.first_t] + [now])),
         )
         # Fold the settled frames into the background regardless, so a missed
         # dart does not pollute the next diff.
@@ -185,35 +186,7 @@ class HitDetector:
             for slot, frame in latest_frames.items():
                 if slot in self._slots and slot not in pending.frames:
                     self._board.commit(slot, frame)
-        if fused is None:
-            return None
-
-        segment = point_mm_to_segment(fused.x_mm, fused.y_mm)
-        votes = tuple(
-            SlotVote(
-                slot=s,
-                tip=pending.candidates[s],
-                x_mm=pending.points_mm[s][0],
-                y_mm=pending.points_mm[s][1],
-                used=s in fused.used_slots,
-            )
-            for s in sorted(pending.candidates)
-        )
-        used_conf = [pending.candidates[s].confidence for s in fused.used_slots]
-        confidence = float(np.mean(used_conf)) if used_conf else 0.0
-        if fused.method != "UnanimousCam":
-            confidence *= 0.8
-        return Hit(
-            x_mm=fused.x_mm,
-            y_mm=fused.y_mm,
-            segment=segment,
-            method=fused.method,
-            confidence=confidence,
-            t_mono=float(max(c for c in [pending.first_t] + [now])),
-            slot_votes=votes,
-            spread_mm=fused.spread_mm,
-            occluded_slots=fused.occluded_slots,
-        )
+        return hit
 
 
 __all__ = ["HitDetector"]

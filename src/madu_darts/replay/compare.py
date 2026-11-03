@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from madu_darts.board.geometry import (
+    classify_segment_disagreement,
+    distance_to_nearest_ring_wire_mm,
+    distance_to_nearest_sector_wire_mm,
+)
 from madu_darts.replay.coords import mm_error
 from madu_darts.replay.pipeline import EchoAutodartsPipeline, HitHypothesis, Pipeline, load_visits, throw_xy_mm
 
@@ -22,6 +27,9 @@ class DartComparison:
     error_mm: float | None
     agree: bool
     method: str | None = None
+    dist_ring_wire_mm: float | None = None
+    dist_sector_wire_mm: float | None = None
+    miss_class: str | None = None
 
     @property
     def kind(self) -> str:
@@ -36,6 +44,52 @@ class DartComparison:
         return "single"
 
 
+def _tip_for_class(ax: float, ay: float, mx: float | None, my: float | None) -> tuple[float, float]:
+    """Prefer Madu tip for miss class; fall back to Autodarts label coords."""
+    if mx is not None and my is not None:
+        return mx, my
+    return ax, ay
+
+
+def _enrich(
+    *,
+    visit_index: int,
+    dart_index: int,
+    autodarts_segment: str,
+    madu_segment: str,
+    ax: float,
+    ay: float,
+    mx: float | None,
+    my: float | None,
+    error_mm: float | None,
+    agree: bool,
+    method: str | None = None,
+) -> DartComparison:
+    tx, ty = _tip_for_class(ax, ay, mx, my)
+    ring = distance_to_nearest_ring_wire_mm(tx, ty)
+    sector = distance_to_nearest_sector_wire_mm(tx, ty)
+    if mx is None or my is None:
+        miss = "missing"
+    else:
+        miss = classify_segment_disagreement(autodarts_segment, madu_segment, tx, ty)
+    return DartComparison(
+        visit_index=visit_index,
+        dart_index=dart_index,
+        autodarts_segment=autodarts_segment,
+        madu_segment=madu_segment,
+        autodarts_x_mm=ax,
+        autodarts_y_mm=ay,
+        madu_x_mm=mx,
+        madu_y_mm=my,
+        error_mm=error_mm,
+        agree=agree,
+        method=method,
+        dist_ring_wire_mm=ring,
+        dist_sector_wire_mm=sector,
+        miss_class=miss,
+    )
+
+
 def replay(recording: Path | str, pipeline: Pipeline | None = None) -> list[DartComparison]:
     """Run ``pipeline`` over every visit in a recording; default echoes Autodarts."""
     root = Path(recording)
@@ -48,17 +102,18 @@ def replay(recording: Path | str, pipeline: Pipeline | None = None) -> list[Dart
             hyp: HitHypothesis | None = hyps[i] if i < len(hyps) else None
             if hyp is not None and (hyp.x_mm != hyp.x_mm or hyp.y_mm != hyp.y_mm):  # NaN → no Hit
                 hyp = None
+            ad_seg = str(throw.get("segmentName", ""))
             if hyp is None:
                 rows.append(
-                    DartComparison(
+                    _enrich(
                         visit_index=meta.visit_index,
                         dart_index=i,
-                        autodarts_segment=str(throw.get("segmentName", "")),
+                        autodarts_segment=ad_seg,
                         madu_segment="",
-                        autodarts_x_mm=ax,
-                        autodarts_y_mm=ay,
-                        madu_x_mm=None,
-                        madu_y_mm=None,
+                        ax=ax,
+                        ay=ay,
+                        mx=None,
+                        my=None,
                         error_mm=None,
                         agree=False,
                     )
@@ -66,17 +121,17 @@ def replay(recording: Path | str, pipeline: Pipeline | None = None) -> list[Dart
                 continue
             err = mm_error(ax, ay, hyp.x_mm, hyp.y_mm)
             rows.append(
-                DartComparison(
+                _enrich(
                     visit_index=meta.visit_index,
                     dart_index=i,
-                    autodarts_segment=str(throw.get("segmentName", "")),
+                    autodarts_segment=ad_seg,
                     madu_segment=hyp.segment_name,
-                    autodarts_x_mm=ax,
-                    autodarts_y_mm=ay,
-                    madu_x_mm=hyp.x_mm,
-                    madu_y_mm=hyp.y_mm,
+                    ax=ax,
+                    ay=ay,
+                    mx=hyp.x_mm,
+                    my=hyp.y_mm,
                     error_mm=err,
-                    agree=str(throw.get("segmentName", "")) == hyp.segment_name,
+                    agree=ad_seg == hyp.segment_name,
                     method=hyp.method,
                 )
             )
@@ -85,13 +140,16 @@ def replay(recording: Path | str, pipeline: Pipeline | None = None) -> list[Dart
 
 @dataclass(frozen=True)
 class AccuracySummary:
-    """Ticket 09 gate metrics for a replay run."""
+    """Ticket 09 / 33 gate metrics for a replay run."""
 
     total: int
     agree: int
     median_error_mm: float | None
     by_kind: dict[str, tuple[int, int]]
     missing: int
+    ring_miss: int = 0
+    neighbour: int = 0
+    bull_disagree: int = 0
 
     @property
     def agreement(self) -> float:
@@ -118,26 +176,33 @@ def summarize(rows: list[DartComparison]) -> AccuracySummary:
         median_error_mm=median,
         by_kind=by_kind,
         missing=sum(1 for r in rows if r.madu_x_mm is None),
+        ring_miss=sum(1 for r in rows if r.miss_class == "ring_miss"),
+        neighbour=sum(1 for r in rows if r.miss_class == "neighbour"),
+        bull_disagree=sum(1 for r in rows if r.miss_class == "bull"),
     )
 
 
 def format_comparison_table(rows: list[DartComparison]) -> str:
-    """Human-readable per-dart table + agreement %."""
+    """Human-readable per-dart table + agreement % + ring/neighbour miss counts."""
     if not rows:
         return "(no darts)"
     header = (
         f"{'V':>2} {'#':>2}  {'AD':<6} {'Madu':<6}  "
-        f"{'ADx':>8} {'ADy':>8}  {'Mx':>8} {'My':>8}  {'errmm':>7}  ok  method"
+        f"{'ADx':>8} {'ADy':>8}  {'Mx':>8} {'My':>8}  {'errmm':>7}  "
+        f"{'ring':>6} {'sec':>6}  ok  class  method"
     )
     lines = [header, "-" * len(header)]
     for r in rows:
         mx = f"{r.madu_x_mm:8.2f}" if r.madu_x_mm is not None else f"{'—':>8}"
         my = f"{r.madu_y_mm:8.2f}" if r.madu_y_mm is not None else f"{'—':>8}"
         err = f"{r.error_mm:7.2f}" if r.error_mm is not None else f"{'—':>7}"
+        ring = f"{r.dist_ring_wire_mm:6.2f}" if r.dist_ring_wire_mm is not None else f"{'—':>6}"
+        sec = f"{r.dist_sector_wire_mm:6.2f}" if r.dist_sector_wire_mm is not None else f"{'—':>6}"
+        miss = r.miss_class or ""
         lines.append(
             f"{r.visit_index:2d} {r.dart_index:2d}  {r.autodarts_segment:<6} {r.madu_segment:<6}  "
             f"{r.autodarts_x_mm:8.2f} {r.autodarts_y_mm:8.2f}  {mx} {my}  {err}  "
-            f"{'Y' if r.agree else 'N'}   {r.method or ''}"
+            f"{ring} {sec}  {'Y' if r.agree else 'N'}  {miss:<8}  {r.method or ''}"
         )
     summary = summarize(rows)
     lines.append("-" * len(header))
@@ -146,6 +211,9 @@ def format_comparison_table(rows: list[DartComparison]) -> str:
         lines.append(f"median error: {summary.median_error_mm:.2f} mm")
     for kind, (ok, n) in sorted(summary.by_kind.items()):
         lines.append(f"  {kind}: {ok}/{n}")
+    lines.append(f"  ring_miss: {summary.ring_miss}")
+    lines.append(f"  neighbour: {summary.neighbour}")
+    lines.append(f"  bull_disagree: {summary.bull_disagree}")
     if summary.missing:
         lines.append(f"  no Hit: {summary.missing}")
     return "\n".join(lines)

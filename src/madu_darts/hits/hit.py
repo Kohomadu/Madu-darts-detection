@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from madu_darts.board.geometry import DOUBLE_OUTER_MM, Segment, _sector_number, point_mm_to_segment
+from madu_darts.board.geometry import (
+    DOUBLE_OUTER_MM,
+    Segment,
+    _sector_number,
+    point_mm_to_segment,
+    ring_side_of_point,
+)
 from madu_darts.hits.tip import TipCandidate
 
 # Autodarts ``coordsX/Y`` = Board mm ÷ outer-double radius (same as record.meta.COORDS_NORM_RADIUS_MM;
@@ -60,6 +66,7 @@ class SlotVote:
             "xMm": round(self.x_mm, 2),
             "yMm": round(self.y_mm, 2),
             "used": self.used,
+            "ringSide": ring_side_of_point(self.x_mm, self.y_mm),
             "tip": self.tip.to_api(),
         }
 

@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel, Field
 
 from madu_darts.calibration import AcceptBlocked, draw_calibration_tile, draw_warped_board
+from madu_darts.hits.overlay import draw_hit_debug
 from madu_darts.server.service import DetectionService
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -32,6 +33,7 @@ class CamConfigPatch(BaseModel):
 
 class CalibrationDisplayPatch(BaseModel):
     showResiduals: bool | None = None
+    showHitDebug: bool | None = None
 
 
 class NudgePanBody(BaseModel):
@@ -85,11 +87,15 @@ def create_app(service: DetectionService) -> FastAPI:
             raise HTTPException(status_code=404, detail=f"unknown camera slot {slot}")
         return slot
 
-    def feed_image(slot: int) -> np.ndarray:
+    def feed_image(slot: int, *, hit_debug: bool | None = None) -> np.ndarray:
         frame = service.frame(slot)
         if frame is None:
             return _placeholder()
-        return draw_calibration_tile(frame, session.get(slot), show_residuals=service.show_residuals)
+        out = draw_calibration_tile(frame, session.get(slot), show_residuals=service.show_residuals)
+        want_hits = service.show_hit_debug if hit_debug is None else bool(hit_debug)
+        if want_hits:
+            out = draw_hit_debug(out, slot, session.get(slot), service.committed_hits())
+        return out
 
     def warped_image(slot: int) -> np.ndarray:
         frame = service.frame(slot)
@@ -289,14 +295,18 @@ def create_app(service: DetectionService) -> FastAPI:
     def calibration() -> dict[str, Any]:
         snap = session.snapshot()
         snap["showResiduals"] = service.show_residuals
+        snap["showHitDebug"] = service.show_hit_debug
         return snap
 
     @app.patch("/api/calibration/display")
     def calibration_display(body: CalibrationDisplayPatch) -> dict[str, Any]:
         if body.showResiduals is not None:
             service.set_show_residuals(body.showResiduals)
+        if body.showHitDebug is not None:
+            service.set_show_hit_debug(body.showHitDebug)
         snap = session.snapshot()
         snap["showResiduals"] = service.show_residuals
+        snap["showHitDebug"] = service.show_hit_debug
         return snap
 
     @app.get("/api/config/calibration/ellipses")
@@ -334,15 +344,22 @@ def create_app(service: DetectionService) -> FastAPI:
         service.publish_state()
         return session.snapshot()
 
+    def _nudge_then_rescore(slot: int) -> dict[str, Any]:
+        """Remeasure edges after a nudge so Accept sees fresh far-double residuals (ticket 34)."""
+        frame = service.frame(slot)
+        if frame is not None:
+            session.rescore({slot: frame})
+        service.sync_motion_with_calibration()
+        service.publish_state()
+        return session.snapshot()
+
     @app.post("/api/calibration/{slot}/nudge-pan")
     def nudge_pan(slot: int, body: NudgePanBody) -> dict[str, Any]:
         try:
             session.nudge_pan(check_slot(slot), body.dx, body.dy)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        service.sync_motion_with_calibration()
-        service.publish_state()
-        return session.snapshot()
+        return _nudge_then_rescore(check_slot(slot))
 
     @app.post("/api/calibration/{slot}/nudge-rotate")
     def nudge_rotate(slot: int, body: NudgeRotateBody) -> dict[str, Any]:
@@ -350,9 +367,7 @@ def create_app(service: DetectionService) -> FastAPI:
             session.nudge_rotate(check_slot(slot), body.deg)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        service.sync_motion_with_calibration()
-        service.publish_state()
-        return session.snapshot()
+        return _nudge_then_rescore(check_slot(slot))
 
     @app.post("/api/calibration/{slot}/revert-auto")
     def revert_auto(slot: int) -> dict[str, Any]:
@@ -401,16 +416,24 @@ def create_app(service: DetectionService) -> FastAPI:
         return Response(_encode_jpeg(img, service.config.jpeg_quality), media_type="image/jpeg")
 
     @app.get("/stream/{slot}.mjpg")
-    async def stream(slot: int, frames: int | None = Query(default=None, ge=1, le=100000)) -> StreamingResponse:
+    async def stream(
+        slot: int,
+        frames: int | None = Query(default=None, ge=1, le=100000),
+        hitDebug: int | None = Query(default=None, ge=0, le=1),
+    ) -> StreamingResponse:
         check_slot(slot)
         interval = 1.0 / max(service.config.stream_fps, 0.5)
         quality = service.config.jpeg_quality
+        # Query wins when present; otherwise the service toggle (ticket 30).
+        force_hits = None if hitDebug is None else bool(hitDebug)
 
         async def generate():
             sent = 0
             while frames is None or sent < frames:
                 started = time.monotonic()
-                jpeg = await asyncio.to_thread(lambda: _encode_jpeg(feed_image(slot), quality))
+                jpeg = await asyncio.to_thread(
+                    lambda: _encode_jpeg(feed_image(slot, hit_debug=force_hits), quality)
+                )
                 yield (
                     f"--{MJPEG_BOUNDARY}\r\nContent-Type: image/jpeg\r\nContent-Length: {len(jpeg)}\r\n\r\n".encode()
                     + jpeg

@@ -124,6 +124,23 @@ def build_parser() -> argparse.ArgumentParser:
     diag.add_argument("--slot", type=int, default=None, help="single cam slot when PATH is one image")
     diag.add_argument("--out", type=Path, default=None, help="directory for overlay JPEGs (optional)")
     diag.add_argument("--log-level", default="info")
+
+    kanban = sub.add_parser(
+        "kanban",
+        help="refresh the markdown kanban from ticket Status / Blocked by lines",
+    )
+    kanban.add_argument(
+        "--effort",
+        default="detection-tool",
+        help="`.scratch/<effort>/` slug (default: detection-tool)",
+    )
+    kanban.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="repo root (default: cwd)",
+    )
+    kanban.add_argument("--log-level", default="info")
     return parser
 
 
@@ -305,7 +322,25 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_replay(args)
     if args.command == "calib-diag":
         return _cmd_calib_diag(args)
+    if args.command == "kanban":
+        return _cmd_kanban(args)
     return 2
+
+
+def _cmd_kanban(args: argparse.Namespace) -> int:
+    from madu_darts.kanban import COLUMN_TITLES, group_by_column, load_tickets, write_board
+
+    root = Path(args.root) if args.root else Path.cwd()
+    issues = root / ".scratch" / args.effort / "issues"
+    if not issues.is_dir():
+        raise SystemExit(f"no issues dir at {issues}")
+    out = write_board(issues)
+    cards = load_tickets(issues)
+    groups = group_by_column(cards)
+    print(f"Wrote {out}")
+    for col in ("todo", "blocked", "doing", "in-testing", "done"):
+        print(f"  {COLUMN_TITLES[col]}: {len(groups[col])}")
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

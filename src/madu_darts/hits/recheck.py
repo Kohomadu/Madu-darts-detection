@@ -2,7 +2,8 @@
 
 Diffes current frames against the Turn's Accept/Start empty references (not the
 dart-committed BoardModel), finds up to N tips per cam, associates across cams,
-and fuses with the same rules as live Hits.
+and fuses with the same claiming rules as live Hits. Tip localization uses the
+shared tip core with stricter Recheck floors (claiming policy, not a tip fork).
 """
 
 from __future__ import annotations
@@ -11,14 +12,13 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-import cv2
 import numpy as np
 
-from madu_darts.board.geometry import point_mm_to_segment
+from madu_darts.hits.claiming import hit_from_fusion
 from madu_darts.hits.config import FusionConfig, TipConfig
 from madu_darts.hits.fusion import fuse_points, on_board
-from madu_darts.hits.hit import Hit, SlotVote
-from madu_darts.hits.tip import TipCandidate, dart_change_mask
+from madu_darts.hits.hit import Hit
+from madu_darts.hits.tip import TipCandidate, locate_tips_vs_empty
 
 log = logging.getLogger(__name__)
 
@@ -27,117 +27,11 @@ RECHECK_METHOD = "Recheck"
 
 # Live TipConfig.min_elongation is 2.0; empty-ref multi-blob recheck sees flight/shaft
 # stubs at ~2.1 that become BestCam Miss/garbage (Board visit #6 → M7). Be stricter.
+# Claiming policy: these floors are parameters on the shared tip core, not a fork.
 RECHECK_MIN_ELONGATION = 3.5
 RECHECK_MIN_TIP_CONFIDENCE = 0.35
 #: Keep the prior Hit when a recheck candidate is this far (mm) and only BestCam-weak.
 RECHECK_KEEP_PRIOR_JUMP_MM = 40.0
-
-
-def _tip_from_component_points(
-    pts: np.ndarray,
-    *,
-    slot: int,
-    area_px: int,
-    config: TipConfig,
-    tip_direction: tuple[float, float],
-    min_elongation: float | None = None,
-    min_confidence: float | None = None,
-) -> TipCandidate | None:
-    """Axis + tip for one connected component's pixel coordinates."""
-    if len(pts) < config.min_points:
-        return None
-    pts_f = pts.astype(np.float32)
-    vx, vy, px0, py0 = cv2.fitLine(pts_f, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
-    direction = np.array([vx, vy], dtype=np.float64)
-    origin = np.array([px0, py0], dtype=np.float64)
-    prior = np.asarray(tip_direction, dtype=np.float64)
-    if float(direction @ prior) < 0:
-        direction = -direction
-    along = (pts_f - origin) @ direction
-    across = np.abs((pts_f - origin) @ np.array([-direction[1], direction[0]]))
-    inliers = across < config.axis_inlier_px
-    if int(inliers.sum()) < max(10, config.min_points // 2):
-        return None
-    along_in = along[inliers]
-    pts_in = pts_f[inliers]
-    length = float(along_in.max() - along_in.min())
-    if length < config.min_length_px:
-        return None
-    cov = np.cov(pts_f.T)
-    eigvals = np.linalg.eigvalsh(cov)
-    elongation = float(eigvals[1] / max(eigvals[0], 1e-6))
-    elong_floor = float(min_elongation if min_elongation is not None else config.min_elongation)
-    if elongation < elong_floor:
-        return None
-    top = np.argsort(-along_in)[: max(1, config.tip_top_k)]
-    tip = pts_in[top].mean(axis=0)
-    flight = pts_in[int(np.argmin(along_in))]
-    inlier_fraction = float(inliers.mean())
-    confidence = min(1.0, inlier_fraction) * min(1.0, length / 80.0) * (1.0 if elongation >= 4.0 else 0.6)
-    conf_floor = float(min_confidence if min_confidence is not None else 0.0)
-    if confidence < conf_floor:
-        return None
-    return TipCandidate(
-        slot=slot,
-        tip_px=(float(tip[0]), float(tip[1])),
-        flight_px=(float(flight[0]), float(flight[1])),
-        axis_dir=(float(direction[0]), float(direction[1])),
-        length_px=length,
-        inlier_fraction=inlier_fraction,
-        elongation=elongation,
-        area_px=int(area_px),
-        confidence=float(confidence),
-    )
-
-
-def locate_tips_vs_empty(
-    background: np.ndarray,
-    frame: np.ndarray,
-    *,
-    max_darts: int,
-    slot: int = 0,
-    config: TipConfig | None = None,
-    tip_direction: tuple[float, float] = (0.0, 1.0),
-) -> list[TipCandidate]:
-    """Up to ``max_darts`` tip candidates from change vs an empty-Board reference."""
-    cfg = config or TipConfig()
-    max_darts = max(1, int(max_darts))
-    height, width = frame.shape[:2]
-    mask = dart_change_mask(background, frame, cfg)
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    if count <= 1:
-        return []
-    comps: list[tuple[int, int]] = []  # (area, label)
-    for label in range(1, count):
-        area = int(stats[label, cv2.CC_STAT_AREA])
-        if area < cfg.min_component_px:
-            continue
-        w = int(stats[label, cv2.CC_STAT_WIDTH])
-        h = int(stats[label, cv2.CC_STAT_HEIGHT])
-        if w > cfg.max_frame_fraction * width and h > cfg.max_frame_fraction * height:
-            continue  # hand / full-frame thrash
-        comps.append((area, label))
-    comps.sort(reverse=True)
-    out: list[TipCandidate] = []
-    for area, label in comps[: max_darts * 3]:  # spare rejects after strict elong/conf gates
-        ys, xs = np.nonzero(labels == label)
-        if len(xs) < cfg.min_points:
-            continue
-        pts = np.column_stack([xs, ys])
-        cand = _tip_from_component_points(
-            pts,
-            slot=slot,
-            area_px=area,
-            config=cfg,
-            tip_direction=tip_direction,
-            min_elongation=max(cfg.min_elongation, RECHECK_MIN_ELONGATION),
-            min_confidence=RECHECK_MIN_TIP_CONFIDENCE,
-        )
-        if cand is not None:
-            out.append(cand)
-        if len(out) >= max_darts:
-            break
-    return out
 
 
 def _associate_and_fuse(
@@ -193,29 +87,14 @@ def _associate_and_fuse(
         )
         if fused is None:
             continue
-        votes = tuple(
-            SlotVote(
-                slot=s,
-                tip=group_tips[s],
-                x_mm=group_mm[s][0],
-                y_mm=group_mm[s][1],
-                used=s in fused.used_slots,
-            )
-            for s in sorted(group_tips)
-        )
-        used_conf = [group_tips[s].confidence for s in fused.used_slots if s in group_tips]
-        confidence = float(np.mean(used_conf)) if used_conf else 0.0
-        segment = point_mm_to_segment(fused.x_mm, fused.y_mm)
+        method = RECHECK_METHOD if fused.method == "UnanimousCam" else fused.method
         hits.append(
-            Hit(
-                x_mm=fused.x_mm,
-                y_mm=fused.y_mm,
-                segment=segment,
-                method=RECHECK_METHOD if fused.method == "UnanimousCam" else fused.method,
-                confidence=confidence,
+            hit_from_fusion(
+                fused,
+                group_tips,
+                group_mm,
                 t_mono=t_mono,
-                slot_votes=votes,
-                spread_mm=fused.spread_mm,
+                method=method,
             )
         )
 
@@ -314,7 +193,7 @@ def recheck_hits(
     fit_ok: dict[int, bool] | None = None,
     t_mono: float = 0.0,
 ) -> list[Hit]:
-    """Re-detect stuck darts; returns a list aligned to ``previous`` when possible."""
+    """Recheck entry: re-detect stuck darts; list aligned to ``previous`` when possible."""
     if not previous:
         return []
     tip_cfg = tip_config or TipConfig()
@@ -334,6 +213,8 @@ def recheck_hits(
             slot=slot,
             config=tip_cfg,
             tip_direction=dirs.get(slot, (0.0, 1.0)),
+            min_elongation=RECHECK_MIN_ELONGATION,
+            min_confidence=RECHECK_MIN_TIP_CONFIDENCE,
         )
         mapped: list[tuple[TipCandidate, tuple[float, float]]] = []
         for tip in tips:
@@ -367,6 +248,5 @@ __all__ = [
     "RECHECK_METHOD",
     "RECHECK_MIN_ELONGATION",
     "RECHECK_MIN_TIP_CONFIDENCE",
-    "locate_tips_vs_empty",
     "recheck_hits",
 ]

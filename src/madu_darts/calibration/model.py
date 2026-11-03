@@ -164,6 +164,10 @@ def accept_block_reasons(
     if not cal.has_fit:
         return [error or "no Board-plane fit"]
 
+    # Ticket 34: pan / fine-rotate clears residuals + rms; do not Accept until rescore.
+    if cal.residuals is None and cal.rms_mm is None:
+        return ["bind nudged; re-measure edges before Accept"]
+
     if cal.residuals is not None and cal.homography is not None:
         from madu_darts.calibration.residuals import summarize_residuals
 

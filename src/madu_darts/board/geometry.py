@@ -47,6 +47,16 @@ SECTOR_CLOCKWISE: tuple[int, ...] = (
 
 _SECTOR_HALF_WIDTH_DEG = 9.0  # 18° wedges; wires sit at ±9° from sector centres
 
+# Physical ring wires (mm from bull). Used for miss classification, not bed assignment.
+RING_WIRE_RADII_MM: tuple[float, ...] = (
+    INNER_BULL_RADIUS_MM,
+    OUTER_BULL_RADIUS_MM,
+    TREBLE_INNER_MM,
+    TREBLE_OUTER_MM,
+    DOUBLE_INNER_MM,
+    DOUBLE_OUTER_MM,
+)
+
 
 @dataclass(frozen=True)
 class Segment:
@@ -147,3 +157,73 @@ def point_mm_to_segment(x_mm: float, y_mm: float) -> Segment:
     if radius <= TREBLE_INNER_MM:
         return Segment(name=f"S{number}", number=number, multiplier=1, bed="SingleInner")
     return Segment(name=f"S{number}", number=number, multiplier=1, bed="SingleOuter")
+
+
+def distance_to_nearest_ring_wire_mm(x_mm: float, y_mm: float) -> float:
+    """Radial distance from ``(x, y)`` to the nearest ring wire (mm)."""
+    radius = math.hypot(x_mm, y_mm)
+    return min(abs(radius - wire) for wire in RING_WIRE_RADII_MM)
+
+
+def nearest_ring_wire_mm(x_mm: float, y_mm: float) -> float:
+    """Radius (mm) of the ring wire nearest to ``(x, y)``."""
+    radius = math.hypot(x_mm, y_mm)
+    return min(RING_WIRE_RADII_MM, key=lambda wire: abs(radius - wire))
+
+
+def ring_side_of_point(x_mm: float, y_mm: float) -> dict[str, float | str]:
+    """Which side of the nearest ring wire a tip sits on (Detection overlay)."""
+    radius = math.hypot(x_mm, y_mm)
+    wire = nearest_ring_wire_mm(x_mm, y_mm)
+    dist = abs(radius - wire)
+    if dist < 1e-6:
+        side = "on"
+    elif radius < wire:
+        side = "inside"
+    else:
+        side = "outside"
+    return {"wireMm": float(wire), "side": side, "distMm": float(dist)}
+
+
+def distance_to_nearest_sector_wire_mm(x_mm: float, y_mm: float) -> float:
+    """Arc distance from ``(x, y)`` to the nearest sector wire (mm)."""
+    radius = math.hypot(x_mm, y_mm)
+    if radius < 1e-9:
+        return 0.0
+    angle_deg = math.degrees(math.atan2(x_mm, y_mm))
+    if angle_deg < 0.0:
+        angle_deg += 360.0
+    # Wires at 9° + 18°·k. Offset from the previous wire is ``(angle + 9) % 18``.
+    from_wire = (angle_deg + _SECTOR_HALF_WIDTH_DEG) % 18.0
+    d_deg = min(from_wire, 18.0 - from_wire)
+    return radius * math.radians(d_deg)
+
+
+def _is_bull_label(segment: str) -> bool:
+    name = segment.strip().upper()
+    return name in ("25", "BULL", "IB", "OB", "50")
+
+
+def classify_segment_disagreement(
+    autodarts_segment: str,
+    madu_segment: str,
+    x_mm: float,
+    y_mm: float,
+) -> str:
+    """Class for a Segment pair at board-mm tip ``(x, y)``.
+
+    Returns ``agree``, ``bull``, ``ring_miss``, or ``neighbour``. A wrong
+    Segment closer to a ring wire than to a sector wire is a ring miss; the
+    opposite is a neighbour. Bull disagreements are their own class.
+    """
+    ad = autodarts_segment.strip()
+    madu = madu_segment.strip()
+    if ad and madu and ad == madu:
+        return "agree"
+    if _is_bull_label(ad) or _is_bull_label(madu):
+        return "bull"
+    ring = distance_to_nearest_ring_wire_mm(x_mm, y_mm)
+    sector = distance_to_nearest_sector_wire_mm(x_mm, y_mm)
+    if ring <= sector:
+        return "ring_miss"
+    return "neighbour"

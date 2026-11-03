@@ -258,7 +258,18 @@ class CalibrationSession:
             h_new = cal.homography @ np.linalg.inv(m)
             rings = rings_from_homography(h_new)
             # Nudge invalidates residual field (samples were for the old H).
-            cal = replace(cal, homography=h_new, rings=rings, residuals=None, rms_mm=None)
+            # Clear quality so Accept stays blocked until rescore (ticket 34).
+            cal = replace(
+                cal,
+                homography=h_new,
+                rings=rings,
+                residuals=None,
+                rms_mm=None,
+                n_inliers=None,
+                n_points=None,
+                rms_double_mm=None,
+                rms_treble_mm=None,
+            )
             self._cals[slot] = cal
             self._accepted = False
             return cal
@@ -379,10 +390,14 @@ class CalibrationSession:
                     else None
                 )
                 far = None if residuals is None else residuals["farDouble"]
+                display_rms = None if far is None or far.get("rmsMm") is None else float(far["rmsMm"])
+                if display_rms is None:
+                    display_rms = cal.rms_mm
                 cams[str(slot)] = {
                     "status": cal.status.value,
                     "rotateOffset": cal.rotate_offset,
                     "rmsMm": cal.rms_mm,
+                    "displayRmsMm": display_rms,
                     "nInliers": cal.n_inliers,
                     "nPoints": cal.n_points,
                     "coverage": None if cal.coverage is None else round(cal.coverage, 3),

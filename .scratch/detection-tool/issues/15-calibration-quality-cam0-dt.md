@@ -1,9 +1,9 @@
-Status: claimed
+Status: resolved
 Type: task
 Model: premium
 Blocked by: 04, 13
 
-<!-- Live Auto+Accept still needed before Status: resolved -->
+The inlier-RMS work below has shipped. It is not the accuracy bar for a double. Next: [33](33-replay-ring-scorecard.md) → [21](21-geometry-radii-from-labels.md) → [22](22-calib-distortion-k1k2.md) → [35](35-accept-half-bed.md), with [34](34-calib-honest-far-double.md) and [36](36-fusion-one-side-of-wire.md).
 
 # Calibration quality: cam0 RMS / wire fit → doubles & trebles wrong
 

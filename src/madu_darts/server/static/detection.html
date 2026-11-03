@@ -33,7 +33,12 @@
   .dot { fill:#3aa0ff; stroke:#fff; stroke-width:1.2; }
   .dot-label { fill:#fff; font: 700 9px system-ui, sans-serif; text-anchor:middle; dominant-baseline:central; pointer-events:none; }
   .cams { display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; }
-  .cam { background:#0f1114; border:1px solid var(--line); border-radius:8px; padding:10px; display:flex; align-items:center; gap:10px; }
+  .cam { background:#0f1114; border:1px solid var(--line); border-radius:8px; padding:10px; display:flex; flex-direction:column; gap:8px; }
+  .cam-head { display:flex; align-items:center; gap:10px; }
+  .cam img.hit-feed { width:100%; border-radius:6px; background:#000; display:none; aspect-ratio:16/9; object-fit:cover; }
+  .cam img.hit-feed.on { display:block; }
+  .vision-tools { display:flex; gap:12px; align-items:center; margin-bottom:10px; font-size:12px; color:var(--muted); }
+  .vision-tools label { display:flex; gap:6px; align-items:center; cursor:pointer; }
   .motion-tile { width:18px; height:18px; border-radius:4px; background:#4b5563; border:1px solid #111; flex:none; }
   .motion-tile.idle { background:#4b5563; }
   .motion-tile.motion, .motion-tile.settling { background:#e6c200; }
@@ -97,6 +102,10 @@
     </section>
     <section class="panel">
       <h2>Vision</h2>
+      <div class="vision-tools">
+        <label><input type="checkbox" id="hit-debug"> Tip / Hit overlay</label>
+        <span class="meta">off by default — green keep, orange drop, blue fused</span>
+      </div>
       <div class="cams" id="cams"></div>
     </section>
     <section class="panel">
@@ -264,13 +273,32 @@
   }
 
   let camSlots = [];
+  let hitDebugOn = false;
   function buildCams(config) {
     camSlots = config.slots.map(s => s.slot);
     const root = $('#cams'); root.innerHTML = '';
     for (const s of config.slots) {
       const d = document.createElement('div'); d.className = 'cam'; d.dataset.slot = s.slot;
-      d.innerHTML = `<span class="motion-tile idle" data-tile></span><div><b>Cam ${s.slot}</b><small data-info>idle</small></div>`;
+      d.innerHTML =
+        `<div class="cam-head"><span class="motion-tile idle" data-tile></span>` +
+        `<div><b>Cam ${s.slot}</b><small data-info>idle</small></div></div>` +
+        `<img class="hit-feed" data-feed alt="cam ${s.slot} tip overlay">`;
       root.appendChild(d);
+    }
+    syncHitFeeds();
+  }
+  function syncHitFeeds() {
+    for (const slot of camSlots) {
+      const d = document.querySelector(`.cam[data-slot="${slot}"]`); if (!d) continue;
+      const img = $('[data-feed]', d);
+      if (!img) continue;
+      if (hitDebugOn) {
+        img.classList.add('on');
+        img.src = `/stream/${slot}.mjpg?hitDebug=1&t=${Date.now()}`;
+      } else {
+        img.classList.remove('on');
+        img.removeAttribute('src');
+      }
     }
   }
   function renderMotion(m) {
@@ -280,9 +308,22 @@
       const c = m.cams[String(slot)] || {};
       const phase = c.isTakeout ? 'takeout' : (c.phase || 'idle');
       $('[data-tile]', d).className = `motion-tile ${phase}`;
-      $('[data-info]', d).textContent = m.enabled ? `${phase} · ${c.changedPixels || 0} px` : 'gated';
+      const votes = ((state && state.madu && state.madu.hits) || [])
+        .map(h => (h.madu && h.madu.votes || []).find(v => v.slot === slot))
+        .filter(Boolean)
+        .map(v => `${v.used ? 'keep' : 'drop'} ${(v.ringSide && v.ringSide.side) || '?'}`)
+        .join(', ');
+      $('[data-info]', d).textContent = (m.enabled ? `${phase} · ${c.changedPixels || 0} px` : 'gated')
+        + (votes ? ` · ${votes}` : '');
     }
   }
+  $('#hit-debug').onchange = async () => {
+    hitDebugOn = $('#hit-debug').checked;
+    try {
+      await api('PATCH', '/api/calibration/display', { showHitDebug: hitDebugOn });
+    } catch (e) { $('#warn').textContent = e.message; }
+    syncHitFeeds();
+  };
 
   // --- controls ---
   $('#toggle').onclick = async () => {
