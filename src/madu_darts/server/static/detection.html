@@ -135,7 +135,8 @@
   };
 
   // --- virtual Board (WDF radii, 20 at top, clockwise) ---
-  const R = { ib: 6.35, ob: 15.9, ti: 99.4, to: 107.4, di: 162.0, do: 170.0, num: 186 };
+  // Scoring faces (ticket 21): outside edge − 1.5 mm wire; coords still ÷ 170.
+  const R = { ib: 6.35, ob: 15.9, ti: 97.9, to: 105.9, di: 160.5, do: 168.5, out: 170.0, num: 186 };
   const SECTORS = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5];
   const NS = 'http://www.w3.org/2000/svg';
   const el = (tag, attrs) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
@@ -251,7 +252,7 @@
     }
     dots.innerHTML = '';
     throws.forEach((t, i) => {
-      const x = t.coordsX * R.do, y = -t.coordsY * R.do;
+      const x = t.coordsX * R.out, y = -t.coordsY * R.out;
       dots.appendChild(el('circle', { class: 'dot', cx: x, cy: y, r: 7 }));
       const lab = el('text', { class: 'dot-label', x, y }); lab.textContent = i + 1; dots.appendChild(lab);
     });
@@ -368,8 +369,8 @@
     if (!ctm) return;
     const local = pt.matrixTransform(ctm.inverse());
     // SVG y is screen-down; Board y is up — flip to match Autodarts coords on the face.
-    const xMm = (local.x / R.do) * 170;
-    const yMm = (-local.y / R.do) * 170;
+    const xMm = (local.x / R.out) * 170;
+    const yMm = (-local.y / R.out) * 170;
     try {
       const idx = pickIndex;
       closePicker();

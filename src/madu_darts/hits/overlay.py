@@ -117,7 +117,10 @@ def draw_hit_debug(
         fused = _hit_xy(hit)
         if fused is None:
             continue
-        proj = np.asarray(board_mm_to_image(cal.homography, cal.rotate_offset, fused), dtype=np.float64)
+        proj = np.asarray(
+            board_mm_to_image(cal.homography, cal.rotate_offset, fused, cal.radial()),
+            dtype=np.float64,
+        )
         if proj.ndim > 1:
             proj = proj[0]
         fx, fy = int(round(float(proj[0]))), int(round(float(proj[1])))

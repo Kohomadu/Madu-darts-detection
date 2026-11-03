@@ -116,17 +116,17 @@ def test_fuse_prefers_inside_double_when_cams_straddle_outer_wire() -> None:
 def test_fuse_prefers_on_treble_when_cams_straddle_treble_wire() -> None:
     """Ticket 25: mean slides inside treble-inner → S; keep the on-treble cam(s)."""
     cfg = FusionConfig(agree_mm=15.0)
-    # Cam0 on T20 (r≈103); cams 1+2 just inside treble-inner (Single) within agree_mm.
-    points = {0: (0.0, 103.4), 1: (0.0, 96.0), 2: (1.0, 95.5)}
-    # Plain mean of all three would be ~r=98.3 → Single; prefer keeps cam0 on T20.
-    mean_y = (103.4 + 96.0 + 95.5) / 3.0
+    # Cam0 on T20 mid-bed; cams 1+2 just inside treble-inner (Single) within agree_mm.
+    # Scoring faces (ticket 21): treble ≈ 97.9–105.9; mid ≈ 101.9.
+    points = {0: (0.0, 101.9), 1: (0.0, 94.0), 2: (1.0, 93.5)}
+    mean_y = (101.9 + 94.0 + 93.5) / 3.0
     assert point_mm_to_segment(0.0, mean_y).bed != "Treble"
     fused = fuse_points(points, {0: 0.5, 1: 0.7, 2: 0.65}, config=cfg)
     assert fused is not None
     assert fused.used_slots == (0,)
     assert point_mm_to_segment(fused.x_mm, fused.y_mm).name == "T20"
     # Two on-treble vs one inside → Cam+1 on the treble pair.
-    pair = {0: (0.0, 103.4), 1: (1.0, 104.0), 2: (0.0, 96.0)}
+    pair = {0: (0.0, 101.9), 1: (1.0, 103.0), 2: (0.0, 94.0)}
     fused2 = fuse_points(pair, config=cfg)
     assert fused2 is not None and fused2.used_slots == (0, 1)
     assert point_mm_to_segment(fused2.x_mm, fused2.y_mm).name == "T20"

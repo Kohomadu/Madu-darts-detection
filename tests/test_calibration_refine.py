@@ -90,7 +90,9 @@ def test_edge_seed_skips_polish_on_clean_synthetic() -> None:
 
 def test_suggest_soft_far_enters_refine_even_when_colour_looks_healthy() -> None:
     """Soft foreshortened double must call refine_homography (not colour-only rescore)."""
-    cam = synthetic_camera("tilt_top", far_double_bias_mm=8.0, far_angle_deg=0.0)
+    # 12 mm bias: after scoring-face midpoints (ticket 21) an 8 mm bias can be
+    # absorbed into the colour H enough that far-double looks PASS (~2 mm).
+    cam = synthetic_camera("tilt_top", far_double_bias_mm=12.0, far_angle_deg=0.0)
     calls: list[object] = []
 
     real_refine = refine_homography

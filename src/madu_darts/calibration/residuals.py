@@ -65,13 +65,15 @@ def residual_field_from_correspondences(
     points_px: np.ndarray,
     points_mm: np.ndarray,
     inlier_mask: np.ndarray | None = None,
+    *,
+    radial=None,
 ) -> ResidualField | None:
     """Build a residual field for a homography and its measured correspondences."""
     px = np.asarray(points_px, dtype=np.float64).reshape(-1, 2)
     mm = np.asarray(points_mm, dtype=np.float64).reshape(-1, 2)
     if len(px) == 0 or len(px) != len(mm):
         return None
-    mapped = image_to_board_mm(homography, 0, px).reshape(-1, 2)
+    mapped = image_to_board_mm(homography, 0, px, radial).reshape(-1, 2)
     err = np.linalg.norm(mapped - mm, axis=1)
     radius = np.hypot(mm[:, 0], mm[:, 1])
     angle = np.degrees(np.arctan2(mm[:, 0], mm[:, 1])) % 360.0
@@ -95,6 +97,7 @@ def foreshortened_angle_deg(
     *,
     radius_mm: float = DOUBLE_OUTER_MM,
     n: int = 72,
+    radial=None,
 ) -> float:
     """Board angle (clockwise from +y, rotate-20 applied) of the compressed outer double.
 
@@ -106,8 +109,8 @@ def foreshortened_angle_deg(
     rad = np.radians(angles)
     pts = np.column_stack([radius_mm * np.sin(rad), radius_mm * np.cos(rad)])
     try:
-        pix = board_mm_to_image(homography, rotate_offset, pts)
-        bull = board_mm_to_image(homography, rotate_offset, (0.0, 0.0))
+        pix = board_mm_to_image(homography, rotate_offset, pts, radial)
+        bull = board_mm_to_image(homography, rotate_offset, (0.0, 0.0), radial)
     except ValueError:
         return 0.0
     dist = np.linalg.norm(pix - np.asarray(bull, dtype=np.float64).reshape(1, 2), axis=1)
@@ -137,12 +140,34 @@ def _band_stats(error_mm: np.ndarray, mask: np.ndarray) -> dict[str, Any] | None
     }
 
 
+def _sector_wire_angular_stats(field: ResidualField) -> dict[str, Any] | None:
+    """Angular residual (deg) on sector-wire samples (mid-single radii ~55–150 mm)."""
+    # Wire samples sit on spokes, not ring annuli; exclude double/treble ring edges.
+    on_wire = (field.radius_mm >= 50.0) & (field.radius_mm <= 155.0)
+    on_wire &= ~((field.radius_mm >= DOUBLE_ANNULUS_MIN_MM) & (field.radius_mm <= DOUBLE_ANNULUS_MAX_MM))
+    on_wire &= ~((field.radius_mm >= TREBLE_BAND_MIN_MM) & (field.radius_mm <= TREBLE_BAND_MAX_MM))
+    n = int(np.count_nonzero(on_wire))
+    if n == 0:
+        return None
+    # Tangential board-mm error ≈ r * Δθ_rad → Δθ_deg = err_tangential * 180/(π r).
+    # We only store scalar |error|; for wire targets the dominant miss is angular, so
+    # approximate Δθ from full residual magnitude (upper bound).
+    r = np.maximum(field.radius_mm[on_wire], 1.0)
+    ang = field.error_mm[on_wire] * (180.0 / (np.pi * r))
+    return {
+        "n": n,
+        "rmsDeg": round(float(np.sqrt(np.mean(ang**2))), 3),
+        "maxDeg": round(float(np.max(ang)), 3),
+    }
+
+
 def summarize_residuals(
     field: ResidualField,
     homography: np.ndarray,
     rotate_offset: int,
     *,
     far_angle_deg: float | None = None,
+    radial=None,
 ) -> dict[str, Any]:
     """Compact per-band residual summary for ``GET /api/calibration`` and the CLI.
 
@@ -153,7 +178,7 @@ def summarize_residuals(
     """
     err = field.error_mm
     far = (
-        foreshortened_angle_deg(homography, rotate_offset)
+        foreshortened_angle_deg(homography, rotate_offset, radial=radial)
         if far_angle_deg is None
         else float(far_angle_deg) % 360.0
     )
@@ -172,6 +197,7 @@ def summarize_residuals(
         "treble": _band_stats(err, on_treble),
         "farDouble": far_double,
         "nearDouble": _band_stats(err, on_double & ~on_far),
+        "sectorWire": _sector_wire_angular_stats(field),
         "farAngleDeg": round(far, 1),
     }
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from madu_darts.board.geometry import (
-    DOUBLE_OUTER_MM,
+    DOUBLE_OUTER_OUTSIDE_MM,
     Segment,
     _sector_number,
     point_mm_to_segment,
@@ -14,9 +14,9 @@ from madu_darts.board.geometry import (
 )
 from madu_darts.hits.tip import TipCandidate
 
-# Autodarts ``coordsX/Y`` = Board mm ÷ outer-double radius (same as record.meta.COORDS_NORM_RADIUS_MM;
-# imported from geometry to avoid a record → server → hits import cycle).
-COORDS_NORM_RADIUS_MM = float(DOUBLE_OUTER_MM)
+# Autodarts ``coordsX/Y`` = Board mm ÷ WDF outside edge of outer double (170 mm),
+# not the scoring-face radius (ticket 21).
+COORDS_NORM_RADIUS_MM = float(DOUBLE_OUTER_OUTSIDE_MM)
 
 # Autodarts 2.1 bed vocabulary (observed in recordings): Single (25), SingleInner,
 # SingleOuter, Double, Triple, Outside. Inner bull assumed "Bull"/"Double".

@@ -150,7 +150,7 @@ def resolve_rotate_offsets(
                 if len(xs):
                     x_mm, y_mm = autodarts_coords_to_mm(float(throw["coordsX"]), float(throw["coordsY"]))
                     for offset in range(20):
-                        px = board_mm_to_image(cal.homography, offset, (x_mm, y_mm))
+                        px = board_mm_to_image(cal.homography, offset, (x_mm, y_mm), cal.radial())
                         scores[offset] += min(200.0, float(np.min(np.hypot(xs - px[0], ys - px[1]))))
                     seen += 1
                 background = frame
@@ -170,7 +170,7 @@ class RecordingBind:
 
     def board_point(self, slot: int, point_px: tuple[float, float]) -> np.ndarray:
         cal = self.cals[slot]
-        return image_to_board_mm(cal.homography, self.offsets[slot], point_px)
+        return image_to_board_mm(cal.homography, self.offsets[slot], point_px, cal.radial())
 
 
 class MaduPipeline:

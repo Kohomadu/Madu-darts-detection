@@ -53,12 +53,30 @@ def apply_homography(matrix: ArrayLike, points: ArrayLike) -> np.ndarray:
     return result[0] if single else result
 
 
-def image_to_board_mm(homography: ArrayLike, rotate_offset: int, points_px: ArrayLike) -> np.ndarray:
-    return apply_homography(effective_homography(homography, rotate_offset), points_px)
+def image_to_board_mm(
+    homography: ArrayLike,
+    rotate_offset: int,
+    points_px: ArrayLike,
+    radial: "RadialParams | None" = None,
+) -> np.ndarray:
+    """Observed image px → Board mm. Optional ``radial`` undistorts before ``H`` (ticket 22)."""
+    from madu_darts.calibration.distortion import undistort_points
+
+    ideal = undistort_points(points_px, radial) if radial is not None else points_px
+    return apply_homography(effective_homography(homography, rotate_offset), ideal)
 
 
-def board_mm_to_image(homography: ArrayLike, rotate_offset: int, points_mm: ArrayLike) -> np.ndarray:
-    return apply_homography(np.linalg.inv(effective_homography(homography, rotate_offset)), points_mm)
+def board_mm_to_image(
+    homography: ArrayLike,
+    rotate_offset: int,
+    points_mm: ArrayLike,
+    radial: "RadialParams | None" = None,
+) -> np.ndarray:
+    """Board mm → observed image px. Optional ``radial`` distorts after ``H⁻¹`` (ticket 22)."""
+    from madu_darts.calibration.distortion import distort_points
+
+    ideal = apply_homography(np.linalg.inv(effective_homography(homography, rotate_offset)), points_mm)
+    return distort_points(ideal, radial) if radial is not None else ideal
 
 
 def polar_mm(radius_mm: float, angle_deg_clockwise_from_top: float) -> tuple[float, float]:
@@ -129,15 +147,15 @@ def reprojection_rms_mm(
     return float(np.sqrt(np.mean(err**2)))
 
 
-def rings_from_homography(homography: ArrayLike, n: int = 72) -> RingFit:
+def rings_from_homography(homography: ArrayLike, n: int = 72, radial=None) -> RingFit:
     """Project the WDF rings into the image and fit ellipses (rotation-invariant)."""
     import cv2
 
     def ring(radius: float) -> Ellipse:
-        pts = board_mm_to_image(homography, 0, ring_points_mm(radius, n))
+        pts = board_mm_to_image(homography, 0, ring_points_mm(radius, n), radial)
         return Ellipse.from_cv(cv2.fitEllipse(pts.astype(np.float32)))
 
-    bull = board_mm_to_image(homography, 0, (0.0, 0.0))
+    bull = board_mm_to_image(homography, 0, (0.0, 0.0), radial)
     return RingFit(
         bull=(float(bull[0]), float(bull[1])),
         double_outer=ring(DOUBLE_OUTER_MM),

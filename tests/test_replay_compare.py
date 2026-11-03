@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from madu_darts.board.geometry import DOUBLE_OUTER_MM, point_mm_to_segment
+from madu_darts.board.geometry import DOUBLE_OUTER_OUTSIDE_MM, point_mm_to_segment
 from madu_darts.record.meta import COORDS_NORM_RADIUS_MM
 from madu_darts.replay import EchoAutodartsPipeline, autodarts_coords_to_mm, format_comparison_table, replay
 
@@ -65,7 +65,7 @@ def test_echo_pipeline_agrees_100_percent(tmp_path: Path) -> None:
 
 def test_autodarts_coords_norm_is_outer_double_radius() -> None:
     # Live 06 capture: S18 SingleOuter lands outside treble, inside double.
-    assert COORDS_NORM_RADIUS_MM == DOUBLE_OUTER_MM == 170.0
+    assert COORDS_NORM_RADIUS_MM == DOUBLE_OUTER_OUTSIDE_MM == 170.0
     x_mm, y_mm = autodarts_coords_to_mm(0.4027691926180652, 0.7505815104550483)
     seg = point_mm_to_segment(x_mm, y_mm)
     assert seg.name == "S18"

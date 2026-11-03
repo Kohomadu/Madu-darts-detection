@@ -188,16 +188,36 @@ class SyntheticCamera:
     raw_homography: np.ndarray
     """Camera px -> mm of the *drawn* (rotated) content; what auto-fit should recover."""
     truth_homography: np.ndarray
-    """Camera px -> true Board mm (20 up)."""
+    """Ideal (undistorted) camera px -> true Board mm (20 up)."""
+    lens_k1: float = 0.0
+    lens_k2: float = 0.0
 
     @property
     def correct_offset(self) -> int:
         return (-self.rotation_sectors) % len(SECTOR_CLOCKWISE)
 
+    def lens_radial(self):
+        from madu_darts.calibration.distortion import RadialParams
+
+        if abs(self.lens_k1) < 1e-12 and abs(self.lens_k2) < 1e-12:
+            return None
+        h, w = self.image.shape[:2]
+        return RadialParams(
+            k1=float(self.lens_k1),
+            k2=float(self.lens_k2),
+            cx=w * 0.5,
+            cy=h * 0.5,
+            scale=float(max(w, h)),
+        )
+
     def pixel_of_mm(self, x_mm: float, y_mm: float) -> np.ndarray:
-        """True camera pixel of a Board-mm point."""
+        """True *observed* camera pixel of a Board-mm point (includes lens bend)."""
+        from madu_darts.calibration.distortion import distort_points
+
         p = np.linalg.inv(self.truth_homography) @ np.array([x_mm, y_mm, 1.0])
-        return p[:2] / p[2]
+        ideal = p[:2] / p[2]
+        radial = self.lens_radial()
+        return distort_points(ideal, radial) if radial is not None else ideal
 
 
 def synthetic_camera(
@@ -208,7 +228,12 @@ def synthetic_camera(
     *,
     far_double_bias_mm: float = 0.0,
     far_angle_deg: float = 0.0,
+    lens_k1: float = 0.0,
+    lens_k2: float = 0.0,
 ) -> SyntheticCamera:
+    """Build a camera frame. ``lens_k1``/``lens_k2`` apply a known radial bend (ticket 22)."""
+    from madu_darts.calibration.distortion import RadialParams, apply_lens_remap
+
     canon = render_board(
         size_px,
         mm_per_px,
@@ -220,6 +245,16 @@ def synthetic_camera(
     image = cv2.warpPerspective(canon, perspective, CAM_SIZE, flags=cv2.INTER_LINEAR, borderValue=_BACKDROP)
     raw = canonical_px_to_mm(size_px, mm_per_px) @ np.linalg.inv(perspective)
     truth = rotation_mm(-rotation_sectors) @ raw
+    if abs(lens_k1) > 1e-12 or abs(lens_k2) > 1e-12:
+        h, w = image.shape[:2]
+        radial = RadialParams(
+            k1=float(lens_k1),
+            k2=float(lens_k2),
+            cx=w * 0.5,
+            cy=h * 0.5,
+            scale=float(max(w, h)),
+        )
+        image = apply_lens_remap(image, radial)
     return SyntheticCamera(
         pose=pose,
         rotation_sectors=rotation_sectors,
@@ -227,4 +262,6 @@ def synthetic_camera(
         perspective=perspective,
         raw_homography=raw,
         truth_homography=truth,
+        lens_k1=float(lens_k1),
+        lens_k2=float(lens_k2),
     )

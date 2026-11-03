@@ -75,7 +75,7 @@ def test_spiderweb_draws_web_lines_on_wires() -> None:
     cam = synthetic_camera("fronto")
     cal = CamCalibration(slot=0, homography=cam.truth_homography, rms_mm=0.3)
     out = draw_spiderweb(cam.image, cal, highlight_twenty=False)
-    on_ring = cam.pixel_of_mm(*polar_mm(170.0, 123.0))  # outer double wire, sector 10 area
+    on_ring = cam.pixel_of_mm(*polar_mm(168.5, 123.0))  # outer double scoring face, sector 10 area
     changed = np.abs(_px(out, on_ring) - _px(cam.image, on_ring)).max()
     assert changed > 30
 
@@ -96,7 +96,7 @@ def test_canonical_mm_to_px_centres_board() -> None:
     m = canonical_mm_to_px(400, 20.0)
     centre = m @ np.array([0.0, 0.0, 1.0])
     np.testing.assert_allclose(centre[:2] / centre[2], (199.5, 199.5))
-    top = m @ np.array([0.0, 190.0, 1.0])  # outer double + margin -> top edge
+    top = m @ np.array([0.0, 188.5, 1.0])  # outer double scoring face + margin -> top edge
     assert top[1] / top[2] == pytest.approx(-0.5, abs=1e-9)
 
 

@@ -253,10 +253,10 @@ class CalibrationSession:
             cal = self._cals[slot]
             if not cal.has_fit or cal.homography is None:
                 raise ValueError(f"cam {slot} has no fit to nudge")
-            bull = board_mm_to_image(cal.homography, cal.rotate_offset, (0.0, 0.0))
+            bull = board_mm_to_image(cal.homography, cal.rotate_offset, (0.0, 0.0), cal.radial())
             m = _image_similarity(bull, dx=dx, dy=dy, ddeg=ddeg)
             h_new = cal.homography @ np.linalg.inv(m)
-            rings = rings_from_homography(h_new)
+            rings = rings_from_homography(h_new, radial=cal.radial())
             # Nudge invalidates residual field (samples were for the old H).
             # Clear quality so Accept stays blocked until rescore (ticket 34).
             cal = replace(
@@ -374,7 +374,7 @@ class CalibrationSession:
             cal = self._cals[self._check(slot)]
             if not cal.has_fit:  # cannot happen after accept(), defensive
                 raise CalibrationNotAccepted(f"cam {slot} has no fit")
-            return image_to_board_mm(cal.homography, cal.rotate_offset, point_px)
+            return image_to_board_mm(cal.homography, cal.rotate_offset, point_px, cal.radial())
 
     # --- export ---
 
@@ -385,7 +385,9 @@ class CalibrationSession:
             for slot in self._slots:
                 cal = self._cals[slot]
                 residuals = (
-                    summarize_residuals(cal.residuals, cal.homography, cal.rotate_offset)
+                    summarize_residuals(
+                        cal.residuals, cal.homography, cal.rotate_offset, radial=cal.radial()
+                    )
                     if cal.residuals is not None and cal.homography is not None
                     else None
                 )
@@ -408,6 +410,10 @@ class CalibrationSession:
                     "maxTrebleMm": None if residuals is None or residuals["treble"] is None else residuals["treble"]["maxMm"],
                     "farDouble": far,
                     "nearDouble": None if residuals is None else residuals["nearDouble"],
+                    "sectorWire": None if residuals is None else residuals.get("sectorWire"),
+                    "radialK1": cal.radial_k1,
+                    "radialK2": cal.radial_k2,
+                    "hasHomographyOnly": cal.homography_only is not None,
                     "error": self._errors[slot],
                     "hasFit": cal.has_fit,
                     "bindLocked": slot in self._bound_slots,

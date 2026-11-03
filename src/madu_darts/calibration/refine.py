@@ -56,10 +56,30 @@ class FitQuality:
     points_px: np.ndarray | None = None
     points_mm: np.ndarray | None = None
     inlier_mask: np.ndarray | None = None
+    radial_k1: float = 0.0
+    radial_k2: float = 0.0
+    principal_px: tuple[float, float] | None = None
+    radial_scale: float = 1.0
+    #: Homography-only H kept when a joint radial fit won (ticket 22).
+    homography_only: np.ndarray | None = None
 
     @property
     def coverage(self) -> float:
         return self.n_inliers / self.n_points if self.n_points else 0.0
+
+    def radial(self):
+        from madu_darts.calibration.distortion import RadialParams
+
+        if abs(self.radial_k1) < 1e-12 and abs(self.radial_k2) < 1e-12:
+            return None
+        cx, cy = self.principal_px if self.principal_px is not None else (0.0, 0.0)
+        return RadialParams(
+            k1=float(self.radial_k1),
+            k2=float(self.radial_k2),
+            cx=float(cx),
+            cy=float(cy),
+            scale=float(self.radial_scale) if self.radial_scale > 0 else 1.0,
+        )
 
 
 @dataclass(frozen=True)
@@ -82,6 +102,8 @@ class RefineParams:
     near_weight: float = 1.5
     #: Board mount angle (deg clockwise from +y); ``None`` disables near weighting.
     mount_angle_deg: float | None = None
+    #: Ticket 22: after H-only refine, try joint ``(k1, k2)`` + H on the same edges.
+    fit_radial: bool = True
 
 
 def _gray(image: np.ndarray) -> np.ndarray:
@@ -276,11 +298,13 @@ def evaluate_fit(
     points_mm: np.ndarray,
     *,
     ransac_threshold_mm: float = 2.0,
+    radial=None,
+    homography_only: np.ndarray | None = None,
 ) -> FitQuality:
     """RMS / inlier stats for a fixed H against measured correspondences."""
     if len(points_px) == 0:
         return FitQuality(rms_mm=float("inf"), n_inliers=0, n_points=0)
-    mapped = image_to_board_mm(homography, 0, points_px).reshape(-1, 2)
+    mapped = image_to_board_mm(homography, 0, points_px, radial).reshape(-1, 2)
     target = np.asarray(points_mm, dtype=np.float64).reshape(-1, 2)
     err = np.linalg.norm(mapped - target, axis=1)
     mask = err <= ransac_threshold_mm
@@ -295,6 +319,13 @@ def evaluate_fit(
     treble_m = (rad >= 90.0) & (rad <= 120.0) & mask
     rms_d = float(np.sqrt(np.mean(err[double_m] ** 2))) if int(double_m.sum()) else None
     rms_t = float(np.sqrt(np.mean(err[treble_m] ** 2))) if int(treble_m.sum()) else None
+    k1 = float(getattr(radial, "k1", 0.0) or 0.0) if radial is not None else 0.0
+    k2 = float(getattr(radial, "k2", 0.0) or 0.0) if radial is not None else 0.0
+    principal = None
+    scale = 1.0
+    if radial is not None:
+        principal = (float(radial.cx), float(radial.cy))
+        scale = float(radial.scale)
     return FitQuality(
         rms_mm=rms,
         n_inliers=n_in,
@@ -304,7 +335,30 @@ def evaluate_fit(
         points_px=points_px,
         points_mm=points_mm,
         inlier_mask=mask,
+        radial_k1=k1,
+        radial_k2=k2,
+        principal_px=principal,
+        radial_scale=scale,
+        homography_only=homography_only,
     )
+
+
+def _far_double_rms(
+    homography: np.ndarray,
+    points_px: np.ndarray,
+    points_mm: np.ndarray,
+    *,
+    radial=None,
+) -> float:
+    from madu_darts.calibration.residuals import residual_field_from_correspondences, summarize_residuals
+
+    field = residual_field_from_correspondences(homography, points_px, points_mm, radial=radial)
+    if field is None:
+        return float("inf")
+    far = summarize_residuals(field, homography, 0, radial=radial).get("farDouble")
+    if far is None or far.get("rmsMm") is None:
+        return float("inf")
+    return float(far["rmsMm"])
 
 
 def refine_homography(
@@ -316,7 +370,8 @@ def refine_homography(
 
     Returns the refined homography and quality against the *final* measurement
     set. If measurement/refit cannot improve the seed, the seed is kept and
-    evaluated on whatever edges were found.
+    evaluated on whatever edges were found. When ``params.fit_radial`` is set,
+    a joint ``(k1, k2)`` + H polish follows the H-only pass (ticket 22).
     """
     p = params or RefineParams()
     h = np.asarray(seed, dtype=np.float64).copy()
@@ -382,6 +437,46 @@ def refine_homography(
         px, mm = measure_board_edges(image, best_h, p)
         if len(px):
             best_q = evaluate_fit(best_h, px, mm, ransac_threshold_mm=p.ransac_threshold_mm)
+
+    if (
+        p.fit_radial
+        and best_q.points_px is not None
+        and best_q.points_mm is not None
+        and best_q.n_inliers >= 16
+    ):
+        from madu_darts.calibration.distortion import fit_joint_homography_radial
+
+        px = best_q.points_px
+        mm = best_q.points_mm
+        h_only = best_h
+        try:
+            h_joint, radial, mask = fit_joint_homography_radial(
+                px,
+                mm,
+                seed_homography=h_only,
+                ransac_threshold_mm=p.ransac_threshold_mm,
+                image_shape=image.shape[:2],
+            )
+        except ValueError:
+            return best_h, best_q
+        if radial.is_identity:
+            return best_h, best_q
+        far_only = _far_double_rms(h_only, px, mm)
+        far_joint = _far_double_rms(h_joint, px, mm, radial=radial)
+        # Keep joint when it helps the foreshortened double (ticket 22 success metric).
+        if math.isfinite(far_joint) and far_joint < far_only - 0.02:
+            best_h = h_joint
+            best_q = evaluate_fit(
+                h_joint,
+                px,
+                mm,
+                ransac_threshold_mm=p.ransac_threshold_mm,
+                radial=radial,
+                homography_only=h_only,
+            )
+            from dataclasses import replace
+
+            best_q = replace(best_q, inlier_mask=mask if best_q.inlier_mask is None else best_q.inlier_mask)
     return best_h, best_q
 
 
@@ -393,7 +488,8 @@ def apply_quality(cal: CamCalibration, quality: FitQuality) -> CamCalibration:
         return cal
     from madu_darts.calibration.residuals import residual_field_from_correspondences
 
-    rings = rings_from_homography(cal.homography)
+    radial = quality.radial()
+    rings = rings_from_homography(cal.homography, radial=radial)
     residuals = None
     if quality.points_px is not None and quality.points_mm is not None and len(quality.points_px):
         residuals = residual_field_from_correspondences(
@@ -401,6 +497,7 @@ def apply_quality(cal: CamCalibration, quality: FitQuality) -> CamCalibration:
             quality.points_px,
             quality.points_mm,
             quality.inlier_mask,
+            radial=radial,
         )
     return replace(
         cal,
@@ -411,6 +508,11 @@ def apply_quality(cal: CamCalibration, quality: FitQuality) -> CamCalibration:
         rms_double_mm=quality.rms_double_mm,
         rms_treble_mm=quality.rms_treble_mm,
         residuals=residuals,
+        radial_k1=quality.radial_k1,
+        radial_k2=quality.radial_k2,
+        principal_px=quality.principal_px,
+        radial_scale=quality.radial_scale,
+        homography_only=quality.homography_only,
     )
 
 

@@ -57,7 +57,7 @@ Moved to the accuracy ladder below. PnP and triangulation stay deferred until 22
 
 ## Kanban
 
-Live board: [kanban.md](kanban.md). Refresh with `madu-darts kanban`. Columns: To do / Blocked / Doing / In testing / Done. Status `in-testing` means code is in and the live Board check is pending (30, 33, 34 right now).
+Live board: [kanban.md](kanban.md). Refresh with `madu-darts kanban`. Columns: To do / Blocked / Doing / In testing / Done. Status `in-testing` means code is in and the live Board check is pending (22, 30, 34 right now).
 
 ## Accuracy ladder (2026-11-03)
 
@@ -65,7 +65,8 @@ Evidence: [research-spider-calibration-accuracy.md](research-spider-calibration-
 
 Frontier done 2026-11-03: [33](issues/33-replay-ring-scorecard.md) scorecard (07: 21/24, ring_miss 2, neighbour 1), [34](issues/34-calib-honest-far-double.md) far-double badge + nudge rescore, [30](issues/30-detection-cam-overlays.md) tip overlay toggle.
 
-Next: [21](issues/21-geometry-radii-from-labels.md) scoring-face radii (unblocked) → [22](issues/22-calib-distortion-k1k2.md) joint distortion → [35](issues/35-accept-half-bed.md) Accept at 2 mm / 4 mm (also needs 34) → [20](issues/20-calib-wire-nudge.md) drag the spider.
+[21](issues/21-geometry-radii-from-labels.md) scoring-face radii **resolved** (WIRE 1.5 → D 168.5/160.5, T 105.9/97.9; 07 still 21/24 ring_miss 2).
+[22](issues/22-calib-distortion-k1k2.md) joint radial+H **in-testing**: synthetic lens fixture clears 2/4 and beats H-only; empty `_ticket19/board` improves cam0 8.5→4.7 / cam1 3.8→2.0 but cam0 still above half-bed — ticket stays open. 07 still **21/24**. Next live: retune 22 on Board → [35](issues/35-accept-half-bed.md) → [20](issues/20-calib-wire-nudge.md).
 
 Fusion: [36](issues/36-fusion-one-side-of-wire.md) (unblocked by 33+30; still needs 21).
 

@@ -12,14 +12,22 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-# --- WDF radii (mm), centre → inside edge of wire / ring ---
-# Bull diameters → radii; treble/double outer edges given; bands 8 mm wide.
+# --- WDF radii (mm) ---
+# Bulls: inside diameters → radii (WDF 4.01).
 INNER_BULL_RADIUS_MM = 6.35  # diameter 12.7
 OUTER_BULL_RADIUS_MM = 15.9  # "25" ring diameter 31.8
-TREBLE_OUTER_MM = 107.4
-TREBLE_INNER_MM = TREBLE_OUTER_MM - 8.0  # 99.4
-DOUBLE_OUTER_MM = 170.0
-DOUBLE_INNER_MM = DOUBLE_OUTER_MM - 8.0  # 162.0
+# Double / treble: WDF publishes outside edge of the outer wire and an
+# inside-to-inside bed of 8.0 mm. Segment boundaries and the spider use the
+# *scoring faces* (inner faces of those wires), not outside-edge − 8.
+# Ticket 21 / research-spider-calibration-accuracy.md.
+BED_WIDTH_MM = 8.0
+WIRE_THICKNESS_MM = 1.5  # named stock; WDF allows 1.27–1.85 (±0.2)
+DOUBLE_OUTER_OUTSIDE_MM = 170.0  # WDF outside edge; Autodarts coords ÷ this
+TREBLE_OUTER_OUTSIDE_MM = 107.4
+DOUBLE_OUTER_MM = DOUBLE_OUTER_OUTSIDE_MM - WIRE_THICKNESS_MM  # 168.5 scoring face
+DOUBLE_INNER_MM = DOUBLE_OUTER_MM - BED_WIDTH_MM  # 160.5
+TREBLE_OUTER_MM = TREBLE_OUTER_OUTSIDE_MM - WIRE_THICKNESS_MM  # 105.9
+TREBLE_INNER_MM = TREBLE_OUTER_MM - BED_WIDTH_MM  # 97.9
 
 # Clockwise from top (sector 20).
 SECTOR_CLOCKWISE: tuple[int, ...] = (
@@ -98,7 +106,7 @@ def segment_name_to_mm(name: str) -> tuple[float, float]:
     if upper in ("OB", "25"):
         return (0.0, (INNER_BULL_RADIUS_MM + OUTER_BULL_RADIUS_MM) / 2.0)
     if upper in ("MISS", "M"):
-        return (0.0, DOUBLE_OUTER_MM + 10.0)
+        return (0.0, DOUBLE_OUTER_OUTSIDE_MM + 10.0)
 
     bed = upper[0]
     rest = upper[1:]
@@ -106,7 +114,7 @@ def segment_name_to_mm(name: str) -> tuple[float, float]:
         number = int(rest)
         angle = _sector_centre_deg(number)
         rad = math.radians(angle)
-        r = DOUBLE_OUTER_MM + 8.0
+        r = DOUBLE_OUTER_OUTSIDE_MM + BED_WIDTH_MM
         return (r * math.sin(rad), r * math.cos(rad))
     if bed in ("T", "D", "S") and rest.isdigit():
         number = int(rest)
@@ -135,9 +143,10 @@ def _sector_centre_deg(number: int) -> float:
 def point_mm_to_segment(x_mm: float, y_mm: float) -> Segment:
     """Map a board-plane tip position in millimetres to a Segment.
 
-    Ring edges: outer wire of a ring is inclusive of that ring; inner wire of
-    treble/double is exclusive (scores as the adjacent single). Bull outer
-    edges are inclusive. Beyond the outer double wire is ``MISS``.
+    Treble/double bounds are scoring faces (inner faces of the ring wires):
+    outer face inclusive of that ring; inner face exclusive (adjacent single).
+    Bull outer edges are inclusive. Beyond the outer double *outside* edge
+    (WDF 170 mm) is ``MISS`` so the physical wire stock itself is still Board.
     """
     radius = math.hypot(x_mm, y_mm)
 
@@ -145,14 +154,20 @@ def point_mm_to_segment(x_mm: float, y_mm: float) -> Segment:
         return Segment(name="IB", number=25, multiplier=2, bed="DoubleBull")
     if radius <= OUTER_BULL_RADIUS_MM:
         return Segment(name="OB", number=25, multiplier=1, bed="SingleBull")
-    if radius > DOUBLE_OUTER_MM:
+    if radius > DOUBLE_OUTER_OUTSIDE_MM:
         return Segment(name="MISS", number=0, multiplier=0, bed="Miss")
 
     number = _sector_number(x_mm, y_mm)
 
     if TREBLE_INNER_MM < radius <= TREBLE_OUTER_MM:
         return Segment(name=f"T{number}", number=number, multiplier=3, bed="Treble")
+    # Outer treble wire stock (scoring face → WDF outside edge).
+    if TREBLE_OUTER_MM < radius <= TREBLE_OUTER_OUTSIDE_MM:
+        return Segment(name=f"T{number}", number=number, multiplier=3, bed="Treble")
     if DOUBLE_INNER_MM < radius <= DOUBLE_OUTER_MM:
+        return Segment(name=f"D{number}", number=number, multiplier=2, bed="Double")
+    # Outer double wire stock (scoring face → WDF outside edge).
+    if DOUBLE_OUTER_MM < radius <= DOUBLE_OUTER_OUTSIDE_MM:
         return Segment(name=f"D{number}", number=number, multiplier=2, bed="Double")
     if radius <= TREBLE_INNER_MM:
         return Segment(name=f"S{number}", number=number, multiplier=1, bed="SingleInner")

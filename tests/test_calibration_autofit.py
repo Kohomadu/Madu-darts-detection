@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from madu_darts.calibration.synthetic import POSES, SyntheticCamera, synthetic_camera
 
-from madu_darts.board import DOUBLE_OUTER_MM, point_mm_to_segment
+from madu_darts.board import DOUBLE_INNER_MM, DOUBLE_OUTER_MM, point_mm_to_segment
 from madu_darts.calibration import (
     AutoFitError,
     AutoFitParams,
@@ -105,11 +105,12 @@ def test_detect_wire_points_orders_from_suggested_twenty() -> None:
     assert wires.double_px.shape == (20, 2) and wires.treble_px.shape == (20, 2)
     # Wire 0 sits at board 9°, i.e. 9° clockwise of screen-up (270° in image coords).
     assert wires.screen_angles_deg[0] == pytest.approx(279.0, abs=1.0)
-    # Points lie on the band midlines.
+    # Points lie on the band midlines (scoring-face mid = 164.5 after ticket 21).
+    mid = (DOUBLE_INNER_MM + DOUBLE_OUTER_MM) / 2.0
     for k in (0, 5, 13):
-        want_d = cam.pixel_of_mm(166.0 * np.sin(np.radians(9 + 18 * k)), 166.0 * np.cos(np.radians(9 + 18 * k)))
+        want_d = cam.pixel_of_mm(mid * np.sin(np.radians(9 + 18 * k)), mid * np.cos(np.radians(9 + 18 * k)))
         np.testing.assert_allclose(wires.double_px[k], want_d, atol=1.5)
-    np.testing.assert_allclose(wires.double_mm[0], (166.0 * np.sin(np.radians(9.0)), 166.0 * np.cos(np.radians(9.0))))
+    np.testing.assert_allclose(wires.double_mm[0], (mid * np.sin(np.radians(9.0)), mid * np.cos(np.radians(9.0))))
 
 
 # --- suggest() end to end ---

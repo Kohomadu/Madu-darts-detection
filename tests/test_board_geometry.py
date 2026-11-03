@@ -7,13 +7,17 @@ import math
 import pytest
 
 from madu_darts.board import (
+    BED_WIDTH_MM,
     DOUBLE_INNER_MM,
     DOUBLE_OUTER_MM,
+    DOUBLE_OUTER_OUTSIDE_MM,
     INNER_BULL_RADIUS_MM,
     OUTER_BULL_RADIUS_MM,
     SECTOR_CLOCKWISE,
     TREBLE_INNER_MM,
     TREBLE_OUTER_MM,
+    TREBLE_OUTER_OUTSIDE_MM,
+    WIRE_THICKNESS_MM,
     point_mm_to_segment,
 )
 
@@ -30,10 +34,17 @@ def _polar(radius_mm: float, angle_deg_clockwise_from_top: float) -> tuple[float
 def test_wdf_radii_match_research_citations() -> None:
     assert INNER_BULL_RADIUS_MM == 6.35
     assert OUTER_BULL_RADIUS_MM == 15.9
-    assert TREBLE_OUTER_MM == 107.4
-    assert TREBLE_INNER_MM == pytest.approx(99.4)
-    assert DOUBLE_OUTER_MM == 170.0
-    assert DOUBLE_INNER_MM == pytest.approx(162.0)
+    assert BED_WIDTH_MM == 8.0
+    assert WIRE_THICKNESS_MM == 1.5
+    assert DOUBLE_OUTER_OUTSIDE_MM == 170.0
+    assert TREBLE_OUTER_OUTSIDE_MM == 107.4
+    # Scoring faces = outside edge − wire thickness; bed = 8 mm inside-to-inside.
+    assert DOUBLE_OUTER_MM == pytest.approx(168.5)
+    assert DOUBLE_INNER_MM == pytest.approx(160.5)
+    assert TREBLE_OUTER_MM == pytest.approx(105.9)
+    assert TREBLE_INNER_MM == pytest.approx(97.9)
+    assert DOUBLE_OUTER_MM - DOUBLE_INNER_MM == pytest.approx(BED_WIDTH_MM)
+    assert TREBLE_OUTER_MM - TREBLE_INNER_MM == pytest.approx(BED_WIDTH_MM)
 
 
 def test_sector_clock_is_standard_clockwise_from_20() -> None:
@@ -101,13 +112,28 @@ def test_just_outside_outer_bull_is_single_inner() -> None:
     assert seg.multiplier == 1
 
 
-def test_beyond_double_outer_is_miss() -> None:
-    seg = point_mm_to_segment(0.0, DOUBLE_OUTER_MM + 1e-9)
+def test_beyond_double_outside_edge_is_miss() -> None:
+    seg = point_mm_to_segment(0.0, DOUBLE_OUTER_OUTSIDE_MM + 1e-9)
     assert seg.name == "MISS"
     assert seg.number == 0
     assert seg.multiplier == 0
     assert seg.bed == "Miss"
     assert seg.value == 0
+
+
+def test_scoring_face_of_outer_double_is_double() -> None:
+    assert point_mm_to_segment(0.0, DOUBLE_OUTER_MM).name == "D20"
+    assert point_mm_to_segment(0.0, DOUBLE_OUTER_MM + 0.1).name == "D20"  # in wire stock
+
+
+def test_just_outside_double_scoring_face_still_double_until_outside_edge() -> None:
+    # Physical outside edge is still on the Board wire; miss starts beyond 170.
+    assert point_mm_to_segment(0.0, DOUBLE_OUTER_OUTSIDE_MM).name == "D20"
+
+
+def test_scoring_face_of_outer_treble_is_treble() -> None:
+    assert point_mm_to_segment(0.0, TREBLE_OUTER_MM).name == "T20"
+    assert point_mm_to_segment(0.0, TREBLE_OUTER_OUTSIDE_MM).name == "T20"
 
 
 # --- Treble / double ring wires ---
@@ -133,8 +159,8 @@ def test_treble_outer_wire_inclusive() -> None:
     assert seg.bed == "Treble"
 
 
-def test_just_outside_treble_is_single_outer() -> None:
-    seg = point_mm_to_segment(0.0, TREBLE_OUTER_MM + 1e-9)
+def test_just_outside_treble_outside_edge_is_single_outer() -> None:
+    seg = point_mm_to_segment(0.0, TREBLE_OUTER_OUTSIDE_MM + 1e-9)
     assert seg.name == "S20"
     assert seg.bed == "SingleOuter"
 
@@ -227,10 +253,10 @@ def test_t5_at_sector_centre() -> None:
 
 
 def test_autodarts_sample_s2_coords_shape() -> None:
-    """Normalized Autodarts coords for S2, scaled to mm (outer double = 1.0)."""
+    """Normalized Autodarts coords for S2, scaled to mm (outside edge = 1.0)."""
     # From board-1.0.7-three-darts capture: S2 at (0.296, -0.458).
-    x = 0.2955363475119883 * DOUBLE_OUTER_MM
-    y = -0.45832545657511614 * DOUBLE_OUTER_MM
+    x = 0.2955363475119883 * DOUBLE_OUTER_OUTSIDE_MM
+    y = -0.45832545657511614 * DOUBLE_OUTER_OUTSIDE_MM
     seg = point_mm_to_segment(x, y)
     assert seg.name == "S2"
     assert seg.bed == "SingleInner"

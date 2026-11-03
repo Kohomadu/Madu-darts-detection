@@ -7,11 +7,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from madu_darts.board.geometry import DOUBLE_OUTER_MM
+from madu_darts.board.geometry import DOUBLE_OUTER_OUTSIDE_MM
 
-# Autodarts ``coordsX/Y`` are Board-plane mm divided by the outer-double radius.
-# Confirmed against live 2.1 captures (S18/S20/S14 radii land in the right beds).
-COORDS_NORM_RADIUS_MM = float(DOUBLE_OUTER_MM)
+# Autodarts ``coordsX/Y`` ÷ WDF outside edge of the outer double (170 mm), not the scoring face.
+COORDS_NORM_RADIUS_MM = float(DOUBLE_OUTER_OUTSIDE_MM)
 
 SCHEMA_VERSION = 1
 

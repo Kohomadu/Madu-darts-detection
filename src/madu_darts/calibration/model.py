@@ -171,7 +171,9 @@ def accept_block_reasons(
     if cal.residuals is not None and cal.homography is not None:
         from madu_darts.calibration.residuals import summarize_residuals
 
-        far = summarize_residuals(cal.residuals, cal.homography, cal.rotate_offset).get("farDouble")
+        far = summarize_residuals(
+            cal.residuals, cal.homography, cal.rotate_offset, radial=cal.radial()
+        ).get("farDouble")
         if far is not None:
             rms = far.get("rmsMm")
             mx = far.get("maxMm")
@@ -271,7 +273,7 @@ class CamCalibration:
 
     slot: int
     homography: np.ndarray | None = None
-    """3x3, image px -> raw board mm (sector clock unresolved)."""
+    """3x3, undistorted image px -> raw board mm (sector clock unresolved)."""
     rotate_offset: int = 0
     """Sectors of clockwise rotation applied to raw mm; wraps mod 20."""
     rings: RingFit | None = None
@@ -287,6 +289,15 @@ class CamCalibration:
     """Inlier RMS on the treble band alone (diagnostic)."""
     residuals: ResidualField | None = None
     """Measured wire/ring residuals for the Calibration overlay (ticket 19)."""
+    radial_k1: float = 0.0
+    """Brown-Conrady-style radial coeff (ticket 22); 0 keeps homography-only."""
+    radial_k2: float = 0.0
+    principal_px: tuple[float, float] | None = None
+    """Principal point in observed pixels; ``None`` → identity radial (k unused)."""
+    radial_scale: float = 1.0
+    """Normaliser for r² in the radial model (typically max image dimension)."""
+    homography_only: np.ndarray | None = None
+    """H-only bind kept beside the joint fit for overlay compare (ticket 22)."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "rotate_offset", int(self.rotate_offset) % SECTORS)
@@ -295,6 +306,26 @@ class CamCalibration:
             if h.shape != (3, 3):
                 raise ValueError(f"homography must be 3x3, got {h.shape}")
             object.__setattr__(self, "homography", h)
+        if self.homography_only is not None:
+            ho = np.asarray(self.homography_only, dtype=np.float64)
+            if ho.shape != (3, 3):
+                raise ValueError(f"homography_only must be 3x3, got {ho.shape}")
+            object.__setattr__(self, "homography_only", ho)
+
+    def radial(self):
+        """``RadialParams`` when k1/k2 are set; else ``None`` (homography-only path)."""
+        from madu_darts.calibration.distortion import RadialParams
+
+        if abs(self.radial_k1) < 1e-12 and abs(self.radial_k2) < 1e-12:
+            return None
+        cx, cy = self.principal_px if self.principal_px is not None else (0.0, 0.0)
+        return RadialParams(
+            k1=float(self.radial_k1),
+            k2=float(self.radial_k2),
+            cx=float(cx),
+            cy=float(cy),
+            scale=float(self.radial_scale) if self.radial_scale > 0 else 1.0,
+        )
 
     @property
     def has_fit(self) -> bool:
@@ -323,7 +354,9 @@ class CamCalibration:
             return base
         from madu_darts.calibration.residuals import summarize_residuals
 
-        far = summarize_residuals(self.residuals, self.homography, self.rotate_offset).get("farDouble")
+        far = summarize_residuals(
+            self.residuals, self.homography, self.rotate_offset, radial=self.radial()
+        ).get("farDouble")
         extra = far_double_status(far)
         return base if extra is None else worse_status(base, extra)
 

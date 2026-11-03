@@ -1,14 +1,18 @@
 """Board geometry: WDF radii, sector clock, and Segment assignment."""
 
 from madu_darts.board.geometry import (
+    BED_WIDTH_MM,
     DOUBLE_INNER_MM,
     DOUBLE_OUTER_MM,
+    DOUBLE_OUTER_OUTSIDE_MM,
     INNER_BULL_RADIUS_MM,
     OUTER_BULL_RADIUS_MM,
     RING_WIRE_RADII_MM,
     SECTOR_CLOCKWISE,
     TREBLE_INNER_MM,
     TREBLE_OUTER_MM,
+    TREBLE_OUTER_OUTSIDE_MM,
+    WIRE_THICKNESS_MM,
     Segment,
     classify_segment_disagreement,
     distance_to_nearest_ring_wire_mm,
@@ -20,14 +24,18 @@ from madu_darts.board.geometry import (
 )
 
 __all__ = [
+    "BED_WIDTH_MM",
     "DOUBLE_INNER_MM",
     "DOUBLE_OUTER_MM",
+    "DOUBLE_OUTER_OUTSIDE_MM",
     "INNER_BULL_RADIUS_MM",
     "OUTER_BULL_RADIUS_MM",
     "RING_WIRE_RADII_MM",
     "SECTOR_CLOCKWISE",
     "TREBLE_INNER_MM",
     "TREBLE_OUTER_MM",
+    "TREBLE_OUTER_OUTSIDE_MM",
+    "WIRE_THICKNESS_MM",
     "Segment",
     "classify_segment_disagreement",
     "distance_to_nearest_ring_wire_mm",

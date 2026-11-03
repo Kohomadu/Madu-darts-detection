@@ -42,6 +42,7 @@ RING_RADII_MM = (
 )
 
 WEB_COLOUR = (255, 230, 60)  # BGR cyan-ish spiderweb
+WEB_ONLY_COLOUR = (160, 120, 40)  # dimmer H-only spider beside joint (ticket 22)
 TWENTY_COLOUR = (40, 40, 230)  # red highlight (Autodarts "20" mark)
 TWENTY_ALPHA = 0.45
 IDEAL_RING_COLOUR = (60, 255, 60)
@@ -71,7 +72,9 @@ def _twenty_wedge_mm(r_in: float = OUTER_BULL_RADIUS_MM, r_out: float = DOUBLE_O
 def _display_rms_mm(cal: CamCalibration) -> tuple[float | None, str]:
     """Primary badge millimetres: far-double all-sample RMS when known (ticket 34)."""
     if cal.residuals is not None and cal.homography is not None:
-        far = summarize_residuals(cal.residuals, cal.homography, cal.rotate_offset).get("farDouble")
+        far = summarize_residuals(
+            cal.residuals, cal.homography, cal.rotate_offset, radial=cal.radial()
+        ).get("farDouble")
         if far is not None and far.get("rmsMm") is not None:
             return float(far["rmsMm"]), " far dbl"
     if cal.rms_mm is not None:
@@ -112,22 +115,23 @@ def _draw_residuals(image: np.ndarray, cal: CamCalibration, *, warped_mm_to_px: 
     if field is None or cal.homography is None or len(field.error_mm) == 0:
         return
 
-    summary = summarize_residuals(field, cal.homography, cal.rotate_offset)
+    radial = cal.radial()
+    summary = summarize_residuals(field, cal.homography, cal.rotate_offset, radial=radial)
     far = float(summary["farAngleDeg"])
     h_img, w_img = image.shape[:2]
     radius = 4 if w_img >= 600 else max(2, int(round(w_img / 160)))
 
     if warped_mm_to_px is None:
-        ideal = board_mm_to_image(cal.homography, 0, field.points_mm)
+        ideal = board_mm_to_image(cal.homography, 0, field.points_mm, radial)
         measured = field.points_px
-        arc_space = lambda pts: board_mm_to_image(cal.homography, cal.rotate_offset, pts)  # noqa: E731
+        arc_space = lambda pts: board_mm_to_image(cal.homography, cal.rotate_offset, pts, radial)  # noqa: E731
         label_mm = polar_mm(DOUBLE_OUTER_MM + 14.0, far)
-        label_px = board_mm_to_image(cal.homography, cal.rotate_offset, label_mm)
+        label_px = board_mm_to_image(cal.homography, cal.rotate_offset, label_mm, radial)
     else:
         from madu_darts.calibration.homography import apply_homography
 
         target = _rotate_raw_mm(field.points_mm, cal.rotate_offset)
-        measured_mm = image_to_board_mm(cal.homography, 0, field.points_px)
+        measured_mm = image_to_board_mm(cal.homography, 0, field.points_px, radial)
         measured_eff = _rotate_raw_mm(measured_mm, cal.rotate_offset)
         ideal = apply_homography(warped_mm_to_px, target)
         measured = apply_homography(warped_mm_to_px, measured_eff)
@@ -190,21 +194,36 @@ def draw_spiderweb(
         return out
 
     h, k = cal.homography, cal.rotate_offset
+    radial = cal.radial()
+
+    def _draw_web(homography, colour: tuple[int, int, int], *, use_radial) -> None:
+        r = radial if use_radial else None
+        for radius in RING_RADII_MM:
+            ring_px = board_mm_to_image(homography, k, ring_points_mm(radius, n=90), r)
+            cv2.polylines(out, [_to_int_pts(ring_px)], True, colour, 1, lineType=cv2.LINE_AA)
+        for angle in wire_angles_deg():
+            p0 = board_mm_to_image(homography, k, polar_mm(OUTER_BULL_RADIUS_MM, angle), r)
+            p1 = board_mm_to_image(homography, k, polar_mm(DOUBLE_OUTER_MM, angle), r)
+            cv2.line(
+                out,
+                tuple(np.round(p0).astype(int)),
+                tuple(np.round(p1).astype(int)),
+                colour,
+                1,
+                lineType=cv2.LINE_AA,
+            )
 
     if highlight_twenty:
-        wedge_px = board_mm_to_image(h, k, _twenty_wedge_mm())
+        wedge_px = board_mm_to_image(h, k, _twenty_wedge_mm(), radial)
         layer = out.copy()
         cv2.fillPoly(layer, [_to_int_pts(wedge_px)], TWENTY_COLOUR, lineType=cv2.LINE_AA)
         cv2.addWeighted(layer, TWENTY_ALPHA, out, 1.0 - TWENTY_ALPHA, 0.0, dst=out)
 
-    for radius in RING_RADII_MM:
-        ring_px = board_mm_to_image(h, k, ring_points_mm(radius, n=90))
-        cv2.polylines(out, [_to_int_pts(ring_px)], True, WEB_COLOUR, 1, lineType=cv2.LINE_AA)
+    # Homography-only spider beside the joint fit when both are present (ticket 22).
+    if cal.homography_only is not None and radial is not None:
+        _draw_web(cal.homography_only, WEB_ONLY_COLOUR, use_radial=False)
 
-    for angle in wire_angles_deg():
-        p0 = board_mm_to_image(h, k, polar_mm(OUTER_BULL_RADIUS_MM, angle))
-        p1 = board_mm_to_image(h, k, polar_mm(DOUBLE_OUTER_MM, angle))
-        cv2.line(out, tuple(np.round(p0).astype(int)), tuple(np.round(p1).astype(int)), WEB_COLOUR, 1, lineType=cv2.LINE_AA)
+    _draw_web(h, WEB_COLOUR, use_radial=True)
 
     if show_residuals:
         _draw_residuals(out, cal)

@@ -9,6 +9,7 @@ import pytest
 from madu_darts.board.geometry import (
     DOUBLE_INNER_MM,
     DOUBLE_OUTER_MM,
+    DOUBLE_OUTER_OUTSIDE_MM,
     classify_segment_disagreement,
     distance_to_nearest_ring_wire_mm,
     distance_to_nearest_sector_wire_mm,
@@ -33,9 +34,12 @@ def test_point_just_inside_double_is_closer_to_ring_than_sector() -> None:
 
 
 def test_point_just_across_outer_double_wire() -> None:
-    x, y = _polar(DOUBLE_OUTER_MM + 0.5, 0.0)
+    x, y = _polar(DOUBLE_OUTER_OUTSIDE_MM + 0.5, 0.0)
     assert point_mm_to_segment(x, y).name == "MISS"
-    assert distance_to_nearest_ring_wire_mm(x, y) == pytest.approx(0.5, abs=0.05)
+    # Nearest scoring-face wire is DOUBLE_OUTER_MM (168.5), ~2.0 mm inward.
+    assert distance_to_nearest_ring_wire_mm(x, y) == pytest.approx(
+        (DOUBLE_OUTER_OUTSIDE_MM + 0.5) - DOUBLE_OUTER_MM, abs=0.05
+    )
 
 
 def test_point_one_sector_over_near_wire_is_neighbour_class() -> None:

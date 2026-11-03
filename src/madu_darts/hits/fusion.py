@@ -8,7 +8,12 @@ from itertools import combinations
 
 import numpy as np
 
-from madu_darts.board import DOUBLE_OUTER_MM, TREBLE_INNER_MM, TREBLE_OUTER_MM
+from madu_darts.board import (
+    DOUBLE_OUTER_OUTSIDE_MM,
+    TREBLE_INNER_MM,
+    TREBLE_OUTER_MM,
+    TREBLE_OUTER_OUTSIDE_MM,
+)
 from madu_darts.hits.config import FusionConfig
 
 # Observed on live Autodarts 2.1 ``throws[].method``.
@@ -111,14 +116,14 @@ def _resolve_double_outer_straddle(
     """If used cams straddle the outer double wire, keep only the inside vote(s).
 
     Live 2026-11-02 V15/V17: cams within ``agree_mm`` but on opposite sides of
-    170 mm — the mean became a miss while one cam alone was a clean double.
-    Prefer the on-Board side (dart in the double vs tip noise just outside).
+    the outer double outside edge (170 mm) — the mean became a miss while one
+    cam alone was a clean double. Prefer the on-Board side.
     """
     if len(used) < 2:
         return used, method
     radii = {s: _radius_mm(pts[s]) for s in used}
-    inside = [s for s in used if radii[s] <= DOUBLE_OUTER_MM]
-    outside = [s for s in used if radii[s] > DOUBLE_OUTER_MM]
+    inside = [s for s in used if radii[s] <= DOUBLE_OUTER_OUTSIDE_MM]
+    outside = [s for s in used if radii[s] > DOUBLE_OUTER_OUTSIDE_MM]
     if not inside or not outside:
         return used, method
     if len(inside) == 1:
@@ -146,7 +151,7 @@ def _resolve_treble_wire_straddle(
     if len(used) < 2:
         return used, method
     radii = {s: _radius_mm(pts[s]) for s in used}
-    on_treble = [s for s in used if TREBLE_INNER_MM <= radii[s] <= TREBLE_OUTER_MM]
+    on_treble = [s for s in used if TREBLE_INNER_MM <= radii[s] <= TREBLE_OUTER_OUTSIDE_MM]
     near_inner = [
         s
         for s in used
@@ -155,7 +160,7 @@ def _resolve_treble_wire_straddle(
     near_outer = [
         s
         for s in used
-        if TREBLE_OUTER_MM < radii[s] <= TREBLE_OUTER_MM + _TREBLE_STRADDLE_MM
+        if TREBLE_OUTER_OUTSIDE_MM < radii[s] <= TREBLE_OUTER_OUTSIDE_MM + _TREBLE_STRADDLE_MM
     ]
     off_near = near_inner + near_outer
     if not on_treble or not off_near:

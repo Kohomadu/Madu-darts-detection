@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** in-testing
+**Status:** resolved
 
 Type: task
 Model: auto
